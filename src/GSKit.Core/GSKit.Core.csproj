@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- HTML parsing — for EndpointDiscovery and JsBundleRipper -->
+    <PackageReference Include="AngleSharp" Version="1.2.0" />
+    <!-- SQLite — for ChromeCookieReader and local price history storage -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+  </ItemGroup>
+</Project>
