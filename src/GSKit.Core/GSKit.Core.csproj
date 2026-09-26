@@ -7,9 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- HTML parsing — for EndpointDiscovery and JsBundleRipper -->
     <PackageReference Include="AngleSharp" Version="1.2.0" />
-    <!-- SQLite — for ChromeCookieReader and local price history storage -->
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
+    <!-- Use macOS system libsqlite3.dylib — no bundled native lib, no single-file issues -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.8" />
+    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.8" />
+    <PackageReference Include="SQLitePCLRaw.provider.sqlite3" Version="2.1.8" />
   </ItemGroup>
 </Project>

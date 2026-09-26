@@ -5,26 +5,6 @@ using GSKit.Core.Models;
 
 namespace GSKit.Core.Scrapers.Inventory;
 
-/// <summary>
-/// Queries Stores-FindStores — the live endpoint confirmed from browser recon.
-///
-/// Endpoint:
-///   GET /on/demandware.store/Sites-gamestop-us-Site/default/Stores-FindStores
-///
-/// Required params:
-///   products=<sku>%3a<quantity>   (colon-encoded, e.g. "133857%3a1")
-///   lat=<latitude>
-///   long=<longitude>
-///   radius=<miles>
-///   showMap=false
-///   source=pdp
-///   hasCondition=true
-///   hasVariantsAvailableForLookup=true
-///   hasVariantsAvailableForPickup=true
-///
-/// Auth: dwsid session cookie (from SfccSession) — no CSRF needed for GET.
-///       cf_clearance needed if CF is in block mode.
-/// </summary>
 public class StoreInventory(SfccSession session)
 {
     private readonly SfccSession _session = session;
@@ -38,10 +18,6 @@ public class StoreInventory(SfccSession session)
         bool   captureRawJson = false,
         CancellationToken ct  = default)
     {
-        if (!_session.IsSeeded)
-            throw new InvalidOperationException(
-                "Session not seeded. Call SeedFromChromeAsync() or SeedManual() first.");
-
         var qs  = BuildQueryString(sku, lat, lon, radiusMiles, quantity);
         var res = await _session.SfccGetAsync("Stores-FindStores", qs, ct);
 
@@ -51,7 +27,7 @@ public class StoreInventory(SfccSession session)
             if (body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
                 throw new CloudflareBlockException(
                     "Cloudflare blocked the request. " +
-                    "Re-seed via gskit or pass --session with a fresh cf_clearance.");
+                    "Open gamestop.com in Chrome then retry, or pass --session.");
 
             throw new HttpRequestException(
                 $"Stores-FindStores returned {(int)res.StatusCode}. " +
@@ -62,7 +38,6 @@ public class StoreInventory(SfccSession session)
         return ParseResponse(json, sku, lat, lon, radiusMiles, captureRawJson);
     }
 
-    /// Overload accepting a zip code — geocodes via Nominatim (free, no API key).
     public async Task<InventoryResult> FindStoresByZipAsync(
         string sku,
         string postalCode,
@@ -75,7 +50,6 @@ public class StoreInventory(SfccSession session)
                                     captureRawJson: captureRawJson, ct: ct);
     }
 
-    // ── Query string ─────────────────────────────────────────────────────────
     private static string BuildQueryString(
         string sku, double lat, double lon, double radius, int qty)
     {
@@ -94,7 +68,6 @@ public class StoreInventory(SfccSession session)
         );
     }
 
-    // ── Response parser ───────────────────────────────────────────────────────
     private static InventoryResult ParseResponse(
         string json, string sku, double lat, double lon,
         double radius, bool captureRawJson)
@@ -102,8 +75,6 @@ public class StoreInventory(SfccSession session)
         using var doc  = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        // The preferred store comes back as a top-level object — its id may
-        // also appear in the stores[] array; deduplicate by id.
         Store? preferredStore = null;
         string? preferredId   = null;
 
@@ -114,21 +85,15 @@ public class StoreInventory(SfccSession session)
             preferredId    = preferredStore.Id;
         }
 
-        // All stores the API returned — in distance order, ALL included.
-        // We never drop out-of-stock cities — the CLI decides what to show.
         var storeList = new List<Store>();
 
         if (root.TryGetProperty("stores", out var storesEl) &&
             storesEl.ValueKind == JsonValueKind.Array)
         {
             foreach (var el in storesEl.EnumerateArray())
-            {
-                var s = ParseStore(el);
-                storeList.Add(s);
-            }
+                storeList.Add(ParseStore(el));
         }
 
-        // Prepend preferred store if it wasn't already in stores[]
         if (preferredStore != null && storeList.All(s => s.Id != preferredId))
             storeList.Insert(0, preferredStore);
 
@@ -146,7 +111,6 @@ public class StoreInventory(SfccSession session)
 
     private static Store ParseStore(JsonElement s)
     {
-        // Hours — array of {day, hours} display strings
         var hours = new List<StoreHoursDisplay>();
         if (s.TryGetProperty("hours", out var hoursArr) &&
             hoursArr.ValueKind == JsonValueKind.Array)
@@ -158,8 +122,6 @@ public class StoreInventory(SfccSession session)
                 ));
         }
 
-        // Conditions eligible for pickup — includes both in/out-of-stock.
-        // We store ALL of them so the CLI can show them with a status badge.
         var conditions = new List<ConditionStock>();
         if (s.TryGetProperty("conditionsEligibleForPickup", out var conds) &&
             conds.ValueKind == JsonValueKind.Array)
@@ -173,7 +135,6 @@ public class StoreInventory(SfccSession session)
                 ));
         }
 
-        // Raw inventory counts — only present on preferredStore
         var inventory = new List<SkuInventory>();
         if (s.TryGetProperty("inventory", out var invArr) &&
             invArr.ValueKind == JsonValueKind.Array)
@@ -185,7 +146,6 @@ public class StoreInventory(SfccSession session)
                 ));
         }
 
-        // Pickup details — present on most stores
         StorePickupDetails? pickup = null;
         if (s.TryGetProperty("storePickupDetails", out var pd) &&
             pd.ValueKind == JsonValueKind.Object)
@@ -198,7 +158,6 @@ public class StoreInventory(SfccSession session)
             );
         }
 
-        // Distance comes back as a string in the API ("5.3")
         double dist = 0;
         if (s.TryGetProperty("distance", out var distEl))
         {
@@ -208,10 +167,9 @@ public class StoreInventory(SfccSession session)
                 dist = distEl.GetDouble();
         }
 
-        // isCurrentlyOpen not always present
         bool? isOpen = null;
         if (s.TryGetProperty("isCurrentlyOpen", out var ico) &&
-            ico.ValueKind == JsonValueKind.True || ico.ValueKind == JsonValueKind.False)
+            (ico.ValueKind == JsonValueKind.True || ico.ValueKind == JsonValueKind.False))
             isOpen = ico.GetBoolean();
 
         return new Store(

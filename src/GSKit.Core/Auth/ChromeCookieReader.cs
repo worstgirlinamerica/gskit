@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using SQLitePCL;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,25 +8,16 @@ namespace GSKit.Core.Auth;
 
 /// <summary>
 /// Reads gamestop.com cookies from Chrome/Chromium on macOS.
-/// Chrome stores cookies in an SQLite file at:
-///   ~/Library/Application Support/Google/Chrome/Default/Cookies
-///
-/// Cookie values are either:
-///   - Plain text (older cookies, some session cookies)
-///   - v10 encrypted: AES-128-CBC, key derived from macOS Keychain
-///   - v20 encrypted: same but newer Chrome versions
-///
-/// We handle both. The Keychain key extraction uses `security` CLI.
+/// Uses macOS system libsqlite3 (/usr/lib/libsqlite3.dylib) — no bundled native lib needed.
 /// </summary>
 public static class ChromeCookieReader
 {
-    // Chrome profiles to check in order
     private static readonly string[] ChromePaths =
     [
         "Library/Application Support/Google/Chrome/Default/Cookies",
         "Library/Application Support/Google/Chrome/Profile 1/Cookies",
         "Library/Application Support/Chromium/Default/Cookies",
-        "Library/Application Support/Microsoft Edge/Default/Cookies",  // Edge uses same format
+        "Library/Application Support/Microsoft Edge/Default/Cookies",
     ];
 
     private static readonly string[] TargetCookies =
@@ -44,27 +36,22 @@ public static class ChromeCookieReader
 
         if (cookiePath == null)
             throw new FileNotFoundException(
-                "Chrome cookie store not found. " +
-                "Checked: " + string.Join(", ", ChromePaths));
+                "Chrome cookie store not found. Checked: " + string.Join(", ", ChromePaths));
 
-        // Chrome holds a lock on the file while running — copy to temp first
         var tmp = Path.GetTempFileName() + ".db";
         File.Copy(cookiePath, tmp, overwrite: true);
 
-        try
-        {
-            return await ReadCookiesAsync(tmp);
-        }
-        finally
-        {
-            try { File.Delete(tmp); } catch { /* ignore */ }
-        }
+        try   { return await ReadCookiesAsync(tmp); }
+        finally { try { File.Delete(tmp); } catch { } }
     }
 
     private static async Task<Dictionary<string, string>> ReadCookiesAsync(string dbPath)
     {
+        // Use macOS system libsqlite3 — works in self-contained single-file publish
+        raw.SetProvider(new SQLite3Provider_sqlite3());
+
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var encryptionKey = await GetChromeKeyAsync(); // null = skip decryption
+        var encryptionKey = await GetChromeKeyAsync();
 
         var connStr = $"Data Source={dbPath};Mode=ReadOnly;Cache=Shared";
         await using var db = new SqliteConnection(connStr);
@@ -85,18 +72,14 @@ public static class ChromeCookieReader
             var plain   = reader.IsDBNull(1) ? "" : reader.GetString(1);
             var encBlob = reader.IsDBNull(2) ? null : (byte[])reader["encrypted_value"];
 
-            if (result.ContainsKey(name)) continue; // take most recent
+            if (result.ContainsKey(name)) continue;
 
             string? value = null;
 
             if (!string.IsNullOrEmpty(plain))
-            {
                 value = plain;
-            }
             else if (encBlob?.Length > 0 && encryptionKey != null)
-            {
                 value = DecryptChromeValue(encBlob, encryptionKey);
-            }
 
             if (value != null)
                 result[name] = value;
@@ -105,22 +88,15 @@ public static class ChromeCookieReader
         return result;
     }
 
-    // ── Chrome v10/v20 decryption (macOS) ────────────────────────────────────
-    // Format: b"v10" or b"v20" + 12-byte nonce + ciphertext + 16-byte tag (AES-GCM)
-    // Key: PBKDF2-SHA1(password, b"saltysalt", 1003 iterations, 16 bytes)
-    // Password: from macOS Keychain item "Chrome Safe Storage"
-
     private static string? DecryptChromeValue(byte[] encrypted, byte[] key)
     {
         try
         {
-            // Check for v10/v20 prefix
             if (encrypted.Length < 3) return null;
             var prefix = Encoding.ASCII.GetString(encrypted, 0, 3);
 
             if (prefix is "v10" or "v20")
             {
-                // AES-GCM: 3 prefix + 12 nonce + ciphertext + 16 tag
                 var nonce      = encrypted[3..15];
                 var ciphertext = encrypted[15..(encrypted.Length - 16)];
                 var tag        = encrypted[(encrypted.Length - 16)..];
@@ -131,8 +107,6 @@ public static class ChromeCookieReader
                 return Encoding.UTF8.GetString(plaintext);
             }
 
-            // Older format: AES-CBC with IV = space * 16
-            // (rare on modern Chrome but still in some profiles)
             var iv = new byte[16];
             Array.Fill(iv, (byte)' ');
             using var aesOld = Aes.Create();
@@ -143,19 +117,13 @@ public static class ChromeCookieReader
             var result = dec.TransformFinalBlock(encrypted, 0, encrypted.Length);
             return Encoding.UTF8.GetString(result).TrimEnd('\0');
         }
-        catch
-        {
-            return null; // decryption failed — cookie not accessible
-        }
+        catch { return null; }
     }
 
-    // Gets the AES key from macOS Keychain via `security` CLI
     private static async Task<byte[]?> GetChromeKeyAsync()
     {
         try
         {
-            // `security find-generic-password -wa 'Chrome Safe Storage'`
-            // Returns the Keychain password Chrome uses to derive the AES key
             var psi = new ProcessStartInfo("security",
                 "find-generic-password -wa 'Chrome Safe Storage'")
             {
@@ -170,18 +138,14 @@ public static class ChromeCookieReader
 
             if (string.IsNullOrEmpty(password)) return null;
 
-            // PBKDF2-SHA1, salt = "saltysalt", 1003 iterations, 16 bytes
             return Rfc2898DeriveBytes.Pbkdf2(
-                password: Encoding.UTF8.GetBytes(password),
-                salt:      Encoding.UTF8.GetBytes("saltysalt"),
-                iterations: 1003,
-                hashAlgorithm: HashAlgorithmName.SHA1,
-                outputLength: 16
+                password:       Encoding.UTF8.GetBytes(password),
+                salt:           Encoding.UTF8.GetBytes("saltysalt"),
+                iterations:     1003,
+                hashAlgorithm:  HashAlgorithmName.SHA1,
+                outputLength:   16
             );
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
     }
 }
