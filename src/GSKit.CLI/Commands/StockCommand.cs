@@ -1,208 +1,304 @@
-using System.CommandLine;
+using Spectre.Console;
 using GSKit.Core.Auth;
 using GSKit.Core.Http;
 using GSKit.Core.Models;
 using GSKit.Core.Scrapers.Inventory;
+using System.Text.Json;
 
 namespace GSKit.CLI.Commands;
 
-/// <summary>
-/// gskit stock &lt;sku&gt; --zip <zip> --radius 100
-/// gskit stock &lt;sku&gt; --lat <lat> --long <lon> --radius 100
-/// gskit stock &lt;sku&gt; --zip <zip> --in-stock-only
-/// gskit stock &lt;sku&gt; --zip <zip> --format json
-/// </summary>
 public static class StockCommand
 {
-    public static Command Build()
+    public static async Task<int> RunAsync(string[] args, bool debug)
     {
-        var skuArg    = new Argument<string>("sku",    "GameStop SKU (e.g. 133857)");
-        var zipOpt    = new Option<string?>("--zip",   "US zip code to search from");
-        var latOpt    = new Option<double?>("--lat",   "Latitude (alternative to --zip)");
-        var lonOpt    = new Option<double?>("--long",  "Longitude (alternative to --zip)");
-        var radOpt    = new Option<double>("--radius", () => 100.0, "Search radius in miles");
-        var stockOnly = new Option<bool>("--in-stock-only", "Only show stores with stock");
-        var formatOpt = new Option<string>("--format", () => "table", "Output: table | json | csv");
-        var manualOpt = new Option<string?>("--session",
-            "Manual session as 'dwsid=xxx;cf_clearance=yyy' (skips Chrome cookie read)");
+        // ── Arg parse ─────────────────────────────────────────────────────────
+        string? sku         = null;
+        string? zip         = null;
+        double? lat         = null;
+        double? lon         = null;
+        double  radius      = 100.0;
+        bool    inStockOnly = false;
+        string  format      = "table";
+        string? session     = null;
 
-        var cmd = new Command("stock", "Check in-store inventory for a SKU")
+        for (int i = 0; i < args.Length; i++)
         {
-            skuArg, zipOpt, latOpt, lonOpt, radOpt, stockOnly, formatOpt, manualOpt
-        };
-
-        cmd.SetHandler(async (sku, zip, lat, lon, radius, inStockOnly, format, session) =>
-        {
-            await using var sfcc = new SfccSession();
-
-            // ── Auth ─────────────────────────────────────────────────────────
-            if (session != null)
+            switch (args[i])
             {
-                // Manual: --session "dwsid=xxx;cf_clearance=yyy"
-                var parts = session.Split(';')
-                    .Select(p => p.Split('=', 2))
-                    .Where(p => p.Length == 2)
-                    .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
-
-                sfcc.SeedManual(
-                    parts.GetValueOrDefault("dwsid")      ?? throw new Exception("Missing dwsid in --session"),
-                    parts.GetValueOrDefault("cf_clearance") ?? throw new Exception("Missing cf_clearance in --session")
-                );
-            }
-            else
-            {
-                // Auto: read from Chrome cookie store
-                try
-                {
-                    await sfcc.SeedFromChromeAsync();
-                    Console.Error.WriteLine("[auth] Seeded from Chrome cookies ✓");
-                }
-                catch (FileNotFoundException)
-                {
-                    // No Chrome — try cold seed (works if CF is lenient)
-                    Console.Error.WriteLine("[auth] Chrome not found — trying cold session seed...");
-                    await sfcc.SeedColdAsync(sku);
-                }
-            }
-
-            // ── Geocode ───────────────────────────────────────────────────────
-            double searchLat, searchLon;
-            if (lat.HasValue && lon.HasValue)
-            {
-                searchLat = lat.Value;
-                searchLon = lon.Value;
-            }
-            else if (zip != null)
-            {
-                Console.Error.WriteLine($"[geo] Geocoding {zip}...");
-                (searchLat, searchLon) = await GeocodingHelper.ZipToLatLonAsync(zip);
-                Console.Error.WriteLine($"[geo] → {searchLat:F5}, {searchLon:F5}");
-            }
-            else
-            {
-                Console.Error.WriteLine("Error: provide --zip or --lat/--long");
-                Environment.Exit(1);
-                return;
-            }
-
-            // ── Query ─────────────────────────────────────────────────────────
-            Console.Error.WriteLine($"[query] SKU {sku} within {radius}mi...");
-            var scraper = new StoreInventory(sfcc);
-            var result  = await scraper.FindStoresAsync(sku, searchLat, searchLon, radius);
-
-            // ── Output ────────────────────────────────────────────────────────
-            switch (format.ToLower())
-            {
-                case "json":
-                    OutputJson(result);
-                    break;
-                case "csv":
-                    OutputCsv(result, inStockOnly);
-                    break;
+                case "--zip":          zip         = args[++i]; break;
+                case "--lat":          lat         = double.Parse(args[++i]); break;
+                case "--long":         lon         = double.Parse(args[++i]); break;
+                case "--radius":       radius      = double.Parse(args[++i]); break;
+                case "--in-stock-only": inStockOnly = true; break;
+                case "--format":       format      = args[++i]; break;
+                case "--session":      session     = args[++i]; break;
                 default:
-                    OutputTable(result, inStockOnly);
+                    if (sku == null && !args[i].StartsWith('-'))
+                        sku = args[i];
                     break;
             }
+        }
 
-        }, skuArg, zipOpt, latOpt, lonOpt, radOpt, stockOnly, formatOpt, manualOpt);
-
-        return cmd;
-    }
-
-    // ── Table output ──────────────────────────────────────────────────────────
-    private static void OutputTable(InventoryResult r, bool inStockOnly)
-    {
-        var inStock  = r.StoresWithStock;
-        var outStock = inStockOnly ? [] : r.StoresWithoutStock;
-
-        Console.WriteLine();
-        Console.WriteLine($"  SKU {r.Sku}  ·  {r.TotalStores} stores within {r.RadiusMiles}mi  ·  {r.FetchedAt:HH:mm} UTC");
-        Console.WriteLine();
-
-        if (inStock.Count == 0)
+        if (sku == null)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine("  ✗  No stores with stock found.");
-            Console.ResetColor();
+            AnsiConsole.MarkupLine("[red]Error:[/] SKU is required  (e.g. gskit stock 133857 --zip <zip>)");
+            return 1;
+        }
+
+        // ── Auth ──────────────────────────────────────────────────────────────
+        await using var sfcc = new SfccSession();
+
+        if (session != null)
+        {
+            Step("auth", "Using manual session cookies");
+            var parts = session.Split(';')
+                .Select(p => p.Split('=', 2))
+                .Where(p => p.Length == 2)
+                .ToDictionary(p => p[0].Trim(), p => p[1].Trim());
+            sfcc.SeedManual(
+                parts.GetValueOrDefault("dwsid")        ?? throw new Exception("--session missing dwsid"),
+                parts.GetValueOrDefault("cf_clearance") ?? throw new Exception("--session missing cf_clearance")
+            );
+            Ok("auth", "manual session seeded");
         }
         else
         {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"  ✓  IN STOCK at {inStock.Count} location(s):");
-            Console.ResetColor();
-            Console.WriteLine();
-
-            foreach (var s in inStock)
-                PrintStoreRow(s, inStock: true);
+            Step("auth", "Reading Chrome cookies...");
+            try
+            {
+                await sfcc.SeedFromChromeAsync();
+                Ok("auth", $"dwsid captured from Chrome");
+            }
+            catch (FileNotFoundException)
+            {
+                Warn("auth", "Chrome not found — trying cold seed (no cf_clearance)");
+                await sfcc.SeedColdAsync(sku);
+                if (!sfcc.IsSeeded)
+                {
+                    AnsiConsole.MarkupLine("[red]✗ auth[/]  Could not seed session. Pass --session 'dwsid=...;cf_clearance=...'");
+                    return 1;
+                }
+                Ok("auth", "cold seed succeeded");
+            }
         }
 
-        if (outStock.Count > 0)
+        // ── Geocode ───────────────────────────────────────────────────────────
+        double searchLat, searchLon;
+
+        if (lat.HasValue && lon.HasValue)
         {
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($"  ✗  Out of stock at {outStock.Count} store(s):");
-            Console.ResetColor();
-            foreach (var s in outStock)
-                PrintStoreRow(s, inStock: false);
+            searchLat = lat.Value;
+            searchLon = lon.Value;
+            if (debug) Step("geo", $"Using provided coords: {searchLat}, {searchLon}");
+        }
+        else if (zip != null)
+        {
+            Step("geo", $"Geocoding {zip}...");
+            (searchLat, searchLon) = await GeocodingHelper.ZipToLatLonAsync(zip);
+            Ok("geo", $"{searchLat:F5}, {searchLon:F5}");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[red]Error:[/] provide --zip or --lat/--long");
+            return 1;
         }
 
-        Console.WriteLine();
+        // ── Query ─────────────────────────────────────────────────────────────
+        Step("query", $"Stores-FindStores  SKU={sku}  radius={radius}mi...");
+
+        InventoryResult result;
+        try
+        {
+            var scraper = new StoreInventory(sfcc);
+            result = await scraper.FindStoresAsync(
+                sku, searchLat, searchLon, radius,
+                captureRawJson: debug);
+        }
+        catch (CloudflareBlockException ex)
+        {
+            AnsiConsole.MarkupLine($"[red]✗ CF block:[/] {ex.Message}");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]✗ error:[/] {ex.Message}");
+            if (debug) AnsiConsole.WriteException(ex);
+            return 1;
+        }
+
+        Ok("query", $"200 OK — {result.TotalStores} stores  ({result.InStockCount} in stock)");
+
+        // ── Debug: raw JSON ───────────────────────────────────────────────────
+        if (debug && result.RawJson != null)
+        {
+            AnsiConsole.MarkupLine("\n[dim]── raw JSON ──────────────────────────────────────────────[/]");
+            AnsiConsole.WriteLine(result.RawJson);
+            AnsiConsole.MarkupLine("[dim]─────────────────────────────────────────────────────────[/]\n");
+        }
+
+        // ── Output ────────────────────────────────────────────────────────────
+        AnsiConsole.WriteLine();
+
+        return format.ToLower() switch
+        {
+            "json" => OutputJson(result),
+            _      => OutputTable(result, inStockOnly),
+        };
     }
 
-    private static void PrintStoreRow(Store s, bool inStock)
+    // ── Table output ──────────────────────────────────────────────────────────
+    private static int OutputTable(InventoryResult r, bool inStockOnly)
     {
-        var status = inStock
-            ? (s.IsLimitedStock ? "⚠ LOW " : "✓ IN  ")
-            : "✗ OUT ";
+        // Header
+        AnsiConsole.MarkupLine(
+            $"  [bold]SKU {r.Sku}[/]  [dim]·[/]  " +
+            $"[bold]{r.TotalStores}[/] stores within [bold]{r.RadiusMiles:F0}mi[/]  [dim]·[/]  " +
+            $"[dim]{r.FetchedAt:HH:mm} UTC[/]");
+        AnsiConsole.WriteLine();
 
-        var color = inStock
-            ? (s.IsLimitedStock ? ConsoleColor.Yellow : ConsoleColor.Green)
-            : ConsoleColor.DarkGray;
+        var inStock  = r.InStock.ToList();
+        var outStock = r.OutOfStock.ToList();
 
-        var conditions = s.ConditionsInStock
+        // ── In-stock section
+        if (inStock.Count == 0)
+        {
+            AnsiConsole.MarkupLine("  [red]✗  No stores with stock in this radius.[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"  [green]✓  IN STOCK at {inStock.Count} location(s):[/]");
+            AnsiConsole.WriteLine();
+            foreach (var s in inStock)
+                PrintRow(s);
+        }
+
+        // ── Out-of-stock section
+        // Always shown unless --in-stock-only. We never drop stores from the
+        // API response — if GameStop returned them they're real locations even
+        // if the specific SKU isn't available there right now.
+        if (!inStockOnly && outStock.Count > 0)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"  [dim]✗  Out of stock / not available at {outStock.Count} store(s):[/]");
+            AnsiConsole.WriteLine();
+            foreach (var s in outStock)
+                PrintRow(s);
+        }
+        else if (inStockOnly && outStock.Count > 0)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine(
+                $"  [dim]({outStock.Count} out-of-stock stores hidden — remove --in-stock-only to see them)[/]");
+        }
+
+        // Footer
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine(
+            $"  [dim]fetched {r.FetchedAt:yyyy-MM-dd HH:mm} UTC · {r.RadiusMiles:F0}mi radius · SKU {r.Sku}[/]");
+        AnsiConsole.WriteLine();
+
+        return 0;
+    }
+
+    private static void PrintRow(Store s)
+    {
+        var (badge, color) = s.IsInStock
+            ? (s.IsLimitedStock ? "⚠ LOW " : "✓ IN  ", s.IsLimitedStock ? "yellow" : "green")
+            : ("✗ OUT ", "red");
+
+        // Which conditions are in stock — fall back to "—" if none
+        var inStockConds = s.ConditionsInStock
             .Where(c => c.IsInStock)
-            .Select(c => c.Condition)
-            .DefaultIfEmpty("?")
-            .Aggregate((a, b) => $"{a}, {b}");
+            .Select(c => c.DisplayName)
+            .ToList();
+        var condStr = inStockConds.Count > 0
+            ? string.Join(", ", inStockConds)
+            : (s.IsInStock ? "In Stock" : "—");
 
-        var open = s.IsCurrentlyOpen
-            ? $"Open until {s.TodayClosingTime}"
-            : "Closed";
+        // Hours / open status
+        var openStr = s.IsCurrentlyOpen.HasValue
+            ? (s.IsCurrentlyOpen.Value
+                ? $"Open until {s.TodayClosingTime ?? "?"}"
+                : "Closed now")
+            : "";
 
-        Console.ForegroundColor = color;
-        Console.Write($"  {status}");
-        Console.ResetColor();
-        Console.Write($" {s.Name,-30}");
-        Console.Write($"  {s.DistanceMiles,6:F1} mi");
-        Console.Write($"  {s.City + ", " + s.State,-18}");
-        Console.Write($"  {conditions,-12}");
-        Console.Write($"  {open}");
-        if (s.Phone != null) Console.Write($"  {s.Phone}");
-        Console.WriteLine();
+        var dist  = $"{s.DistanceMiles,5:F1} mi";
+        var loc   = Escape($"{s.City}, {s.StateCode}");
+        var name  = Escape(s.Name.Length > 28 ? s.Name[..25] + "..." : s.Name);
+        var phone = s.Phone ?? "";
+        var cond  = Escape(condStr.Length > 18 ? condStr[..15] + "…" : condStr);
+
+        AnsiConsole.MarkupLine(
+            $"  [{color}]{badge}[/]" +
+            $" {name,-28}" +
+            $"  [dim]{dist}[/]" +
+            $"  {loc,-18}" +
+            $"  [cyan]{cond,-18}[/]" +
+            $"  [dim]{Escape(openStr),-24}[/]" +
+            $"  [dim]{Escape(phone)}[/]"
+        );
     }
 
     // ── JSON output ───────────────────────────────────────────────────────────
-    private static void OutputJson(InventoryResult r)
+    private static int OutputJson(InventoryResult r)
     {
-        var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(r, opts));
+        var opts = new JsonSerializerOptions { WriteIndented = true };
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            sku            = r.Sku,
+            query_lat      = r.QueryLat,
+            query_lon      = r.QueryLon,
+            radius_miles   = r.RadiusMiles,
+            fetched_at     = r.FetchedAt,
+            total_stores   = r.TotalStores,
+            in_stock_count = r.InStockCount,
+            stores         = r.Stores.Select(s => new
+            {
+                id               = s.Id,
+                name             = s.Name,
+                address          = $"{s.Address1}{(s.Address2 != null ? ", " + s.Address2 : "")}",
+                city             = s.City,
+                state            = s.StateCode,
+                postal_code      = s.PostalCode,
+                phone            = s.Phone,
+                distance_miles   = s.DistanceMiles,
+                is_in_stock      = s.IsInStock,
+                is_limited_stock = s.IsLimitedStock,
+                is_preferred     = s.IsPreferredStore,
+                is_currently_open = s.IsCurrentlyOpen,
+                today_closing    = s.TodayClosingTime,
+                conditions       = s.ConditionsInStock.Select(c => new
+                {
+                    display   = c.DisplayName,
+                    in_stock  = c.IsInStock,
+                }),
+                inventory_counts = s.Inventory.Select(i => new
+                {
+                    sku   = i.Sku,
+                    count = i.Count,
+                }),
+                pickup = s.PickupDetails == null ? null : (object)new
+                {
+                    bops = s.PickupDetails.BopsEnabled,
+                    ispu = s.PickupDetails.IspuEnabled,
+                    hops = s.PickupDetails.HopsEnabled,
+                },
+            }),
+        }, opts));
+        return 0;
     }
 
-    // ── CSV output ────────────────────────────────────────────────────────────
-    private static void OutputCsv(InventoryResult r, bool inStockOnly)
-    {
-        Console.WriteLine("StoreId,Name,Address,City,State,Zip,Phone,Distance,InStock,LimitedStock,Conditions,CurrentlyOpen,ClosingTime");
-        var stores = inStockOnly ? r.StoresWithStock : r.StoresWithStock.Concat(r.StoresWithoutStock);
-        foreach (var s in stores)
-        {
-            var conds = string.Join("|", s.ConditionsInStock.Where(c => c.IsInStock).Select(c => c.Condition));
-            Console.WriteLine(string.Join(",",
-                s.Id, $"\"{s.Name}\"",
-                $"\"{s.Address1} {s.Address2}\"".Trim(),
-                s.City, s.State, s.PostalCode, s.Phone ?? "",
-                s.DistanceMiles, s.IsInStock, s.IsLimitedStock,
-                conds, s.IsCurrentlyOpen, s.TodayClosingTime ?? ""
-            ));
-        }
-    }
+    // ── Progress helpers ──────────────────────────────────────────────────────
+    private static void Step(string tag, string msg) =>
+        AnsiConsole.MarkupLine($"  [dim]●[/] [grey]{tag,-6}[/]  {msg}");
+
+    private static void Ok(string tag, string msg) =>
+        AnsiConsole.MarkupLine($"  [green]✓[/] [grey]{tag,-6}[/]  [dim]{msg}[/]");
+
+    private static void Warn(string tag, string msg) =>
+        AnsiConsole.MarkupLine($"  [yellow]⚠[/] [grey]{tag,-6}[/]  {msg}");
+
+    /// Escape Spectre.Console markup chars in user data
+    private static string Escape(string s) =>
+        s.Replace("[", "[[").Replace("]", "]]");
 }

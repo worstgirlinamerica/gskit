@@ -1,22 +1,18 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
-
 namespace GSKit.Core.Models;
 
-public record StoreHours(string Day, string Open, string Close);
 public record StoreHoursDisplay(string Day, string Hours);
 
 public record ConditionStock(
     string Condition,
     string Pid,
-    bool IsInStock,
+    bool   IsInStock,
     string DisplayName
 );
 
 public record StorePickupDetails(
-    bool HopsEnabled,   // ship-to-store
-    bool BopsEnabled,   // buy online pick up in store
-    bool IspuEnabled,   // in-store pickup
+    bool HopsEnabled,       // ship-to-store
+    bool BopsEnabled,       // buy online pick up in store
+    bool IspuEnabled,       // in-store pickup
     bool IsOnMilitaryBase
 );
 
@@ -26,7 +22,7 @@ public record Store(
     string   Address1,
     string?  Address2,
     string   City,
-    string   State,
+    string   StateCode,             // matches API field stateCode
     string   PostalCode,
     string?  Phone,
     double   Latitude,
@@ -35,15 +31,17 @@ public record Store(
     bool     IsInStock,
     bool     IsLimitedStock,
     bool     IsPreferredStore,
-    bool     IsCurrentlyOpen,
+    bool?    IsCurrentlyOpen,       // nullable — not present on all stores
     string?  TodayClosingTime,
-    string   StoreMode,               // "ACTIVE" etc
-    StorePickupDetails PickupDetails,
-    List<ConditionStock> ConditionsInStock,
-    List<StoreHoursDisplay> Hours,
-    // raw inventory array — may be empty even when isInStock=true
-    // GameStop only populates count[] on the preferredStore
-    List<SkuInventory> Inventory
-);
+    string   StoreMode,
+    StorePickupDetails?             PickupDetails,
+    List<ConditionStock>            ConditionsInStock,
+    List<StoreHoursDisplay>         Hours,
+    List<SkuInventory>              Inventory
+)
+{
+    /// <summary>Convenience — eligible conditions regardless of stock status</summary>
+    public IEnumerable<ConditionStock> ConditionsEligibleForPickup => ConditionsInStock;
+}
 
 public record SkuInventory(string Sku, int Count);
