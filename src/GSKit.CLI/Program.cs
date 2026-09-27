@@ -23,7 +23,7 @@ if (argList.Count == 0 || argList[0] is "-h" or "--help")
 
 if (argList[0] is "--version" or "-V")
 {
-    AnsiConsole.MarkupLine("[grey85]gskit[/] [dim]0.1.0[/]");
+    AnsiConsole.MarkupLine("[grey85]gskit[/] [dim]0.2.0[/]");
     return 0;
 }
 
@@ -36,7 +36,7 @@ if (cfg.DefaultZip is { Length: > 0 })
     {
         argList.Add("--zip");
         argList.Add(cfg.DefaultZip);
-        Log.Dbg($"config: defaultZip applied", debug);
+        Log.Dbg("config: defaultZip applied", debug);
     }
 }
 
@@ -55,11 +55,14 @@ var ctx = new RunContext(debug, verbose, jsonMode);
 
 return argList[0] switch
 {
-    "stock" => await StockCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
-    "info"  => await InfoCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
-    "sdd"   => await SddCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
-    "probe" => await ProbeCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
-    _       => Unknown(argList[0]),
+    "stock"              => await StockCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "info"               => await InfoCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "sdd"                => await SddCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "probe"              => await ProbeCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "search"             => await SearchCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "tiles"              => await TilesCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "store-availability" => await StoreAvailabilityCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    _                    => Unknown(argList[0]),
 };
 
 static int Unknown(string cmd)
