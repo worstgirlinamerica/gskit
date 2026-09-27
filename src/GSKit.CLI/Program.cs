@@ -8,7 +8,13 @@ bool debug   = argList.Remove("--debug");
 bool noColor = argList.Remove("--no-color");
 bool verbose = argList.Remove("--verbose") || argList.Remove("-v");
 
+// Detect --format json early so we can suppress log output before any command runs
+int fmtIdx = argList.IndexOf("--format");
+bool jsonMode = fmtIdx >= 0 && fmtIdx + 1 < argList.Count &&
+                argList[fmtIdx + 1].Equals("json", StringComparison.OrdinalIgnoreCase);
+
 if (noColor) AnsiConsole.Profile.Capabilities.ColorSystem = ColorSystem.NoColors;
+if (jsonMode) Log.Quiet = true;
 
 if (argList.Count == 0 || argList[0] is "-h" or "--help")
 {
@@ -22,18 +28,16 @@ if (argList[0] is "--version" or "-V")
     return 0;
 }
 
-// Load user config and inject defaults where the caller didn't supply them
 var cfg = GsConfig.Load();
 
 if (cfg.DefaultZip is { Length: > 0 })
 {
-    // Inject --zip default if stock/sdd command didn't provide one
     bool hasZip = argList.Contains("--zip") || argList.Contains("--lat");
     if (!hasZip && argList.Count > 0 && argList[0] is "stock" or "sdd")
     {
         argList.Add("--zip");
         argList.Add(cfg.DefaultZip);
-        Log.Dbg($"config: defaultZip={cfg.DefaultZip}", debug);
+        Log.Dbg($"config: defaultZip applied", debug);
     }
 }
 
@@ -48,7 +52,7 @@ if (cfg.DefaultRadius.HasValue)
     }
 }
 
-var ctx = new RunContext(debug, verbose);
+var ctx = new RunContext(debug, verbose, jsonMode);
 
 return argList[0] switch
 {

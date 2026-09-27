@@ -27,7 +27,7 @@ public sealed class StoreInventory(GameStopClient client)
                 throw new CloudflareBlockException(
                     "Cloudflare is challenging this IP. " +
                     "This usually means you're on a VPN or datacenter IP. " +
-                    "Try from a residential connection, or pass --session with cookies from your browser.");
+                    "Try from a residential connection.");
 
             throw new HttpRequestException(
                 $"Stores-FindStores returned {(int)res.StatusCode}. " +
@@ -74,17 +74,8 @@ public sealed class StoreInventory(GameStopClient client)
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        Store? preferredStore = null;
-        string? preferredId   = null;
-
-        if (root.TryGetProperty("preferredStore", out var ps) &&
-            ps.ValueKind == JsonValueKind.Object)
-        {
-            preferredStore = ParseStore(ps);
-            preferredId    = preferredStore.Id;
-        }
-
         var stores = new List<Store>();
+
         if (root.TryGetProperty("stores", out var storesEl) &&
             storesEl.ValueKind == JsonValueKind.Array)
         {
@@ -92,11 +83,16 @@ public sealed class StoreInventory(GameStopClient client)
                 stores.Add(ParseStore(el));
         }
 
-        // preferredStore is returned separately by the API — merge it in at correct distance position
-        if (preferredStore != null && stores.All(s => s.Id != preferredId))
+        // preferredStore is returned separately — only include it if not already in stores[]
+        if (root.TryGetProperty("preferredStore", out var ps) &&
+            ps.ValueKind == JsonValueKind.Object)
         {
-            stores.Add(preferredStore);
-            stores.Sort((a, b) => a.DistanceMiles.CompareTo(b.DistanceMiles));
+            var preferred = ParseStore(ps);
+            if (stores.All(s => s.Id != preferred.Id))
+            {
+                stores.Add(preferred);
+                stores.Sort((a, b) => a.DistanceMiles.CompareTo(b.DistanceMiles));
+            }
         }
 
         return new InventoryResult
@@ -113,22 +109,41 @@ public sealed class StoreInventory(GameStopClient client)
 
     private static Store ParseStore(JsonElement s)
     {
-        var hours = new List<StoreHoursDisplay>();
-        if (s.TryGetProperty("hours", out var ha) && ha.ValueKind == JsonValueKind.Array)
-            foreach (var h in ha.EnumerateArray())
-                hours.Add(new StoreHoursDisplay(
-                    h.GetProperty("day").GetString()!,
-                    h.GetProperty("hours").GetString()!));
+        // storeOperationHours is a JSON-encoded string: "[{\"day\":\"Sun\",\"open\":\"1000\",\"close\":\"1900\"},...]"
+        var hours = new List<StoreHours>();
+        if (s.TryGetProperty("storeOperationHours", out var soh) &&
+            soh.ValueKind == JsonValueKind.String)
+        {
+            var raw = soh.GetString();
+            if (!string.IsNullOrEmpty(raw))
+            {
+                try
+                {
+                    using var hdoc = JsonDocument.Parse(raw);
+                    foreach (var h in hdoc.RootElement.EnumerateArray())
+                    {
+                        var day   = h.TryGetProperty("day",   out var d) ? d.GetString() ?? "" : "";
+                        var open  = h.TryGetProperty("open",  out var o) ? o.GetString() ?? "" : "";
+                        var close = h.TryGetProperty("close", out var c) ? c.GetString() ?? "" : "";
+                        if (day.Length > 0) hours.Add(new StoreHours(day, open, close));
+                    }
+                }
+                catch { /* malformed — leave hours empty */ }
+            }
+        }
 
+        // conditionsEligibleForPickup is the authoritative list — has isInStock per condition
         var conditions = new List<ConditionStock>();
         if (s.TryGetProperty("conditionsEligibleForPickup", out var ca) &&
             ca.ValueKind == JsonValueKind.Array)
+        {
             foreach (var c in ca.EnumerateArray())
                 conditions.Add(new ConditionStock(
                     c.GetProperty("condition").GetString()!,
                     c.GetProperty("pid").GetString()!,
                     c.GetProperty("isInStock").GetBoolean(),
                     c.GetProperty("displayName").GetString()!));
+        }
 
         var inventory = new List<SkuInventory>();
         if (s.TryGetProperty("inventory", out var ia) && ia.ValueKind == JsonValueKind.Array)
@@ -151,17 +166,13 @@ public sealed class StoreInventory(GameStopClient client)
             else if (de.ValueKind == JsonValueKind.Number) dist = de.GetDouble();
         }
 
-        bool? isOpen = null;
-        if (s.TryGetProperty("isCurrentlyOpen", out var ico) &&
-            (ico.ValueKind == JsonValueKind.True || ico.ValueKind == JsonValueKind.False))
-            isOpen = ico.GetBoolean();
-
         return new Store(
             Id:               s.GetProperty("ID").GetString()!,
             Name:             s.GetProperty("name").GetString()!.Trim(),
             Address1:         s.GetProperty("address1").GetString()!,
             Address2:         s.TryGetProperty("address2", out var a2) &&
-                              a2.ValueKind != JsonValueKind.Null ? a2.GetString() : null,
+                              a2.ValueKind == JsonValueKind.String &&
+                              (a2.GetString()?.Length ?? 0) > 0 ? a2.GetString() : null,
             City:             s.GetProperty("city").GetString()!,
             StateCode:        s.GetProperty("stateCode").GetString()!,
             PostalCode:       s.GetProperty("postalCode").GetString()!,
@@ -173,14 +184,11 @@ public sealed class StoreInventory(GameStopClient client)
             IsInStock:        Bool(s, "isInStock"),
             IsLimitedStock:   Bool(s, "isLimitedStock"),
             IsPreferredStore: Bool(s, "isPreferredStore"),
-            IsCurrentlyOpen:  isOpen,
-            TodayClosingTime: s.TryGetProperty("todayClosingTime", out var tc) &&
-                              tc.ValueKind == JsonValueKind.String ? tc.GetString() : null,
             StoreMode:        s.TryGetProperty("storeMode", out var sm) &&
                               sm.ValueKind == JsonValueKind.String ? sm.GetString()! : "ACTIVE",
             PickupDetails:    pickup,
-            ConditionsInStock: conditions,
-            Hours:            hours,
+            ConditionsEligibleForPickup: conditions,
+            OperationHours:   hours,
             Inventory:        inventory);
     }
 
