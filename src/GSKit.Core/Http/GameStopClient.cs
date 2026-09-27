@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 
 namespace GSKit.Core.Http;
@@ -8,11 +9,10 @@ namespace GSKit.Core.Http;
 ///
 /// From HAR analysis (2026-09-27): Stores-FindStores returns 200 with ZERO
 /// cookies from a residential IP. CF is scoring TLS fingerprint + header
-/// order only — no cf_clearance, no dwsid, nothing. Chrome cookie auth
-/// was completely unnecessary.
+/// order only — no cf_clearance, no dwsid, nothing.
 ///
 /// What matters:
-///   1. Header order matches Chrome (sec-ch-ua before user-agent, etc.)
+///   1. Header order matches Chrome wire order from HAR exactly
 ///   2. Accept-Encoding includes br + zstd
 ///   3. X-Requested-With: XMLHttpRequest on AJAX calls
 ///   4. Referer set to the product page
@@ -30,33 +30,39 @@ public sealed class GameStopClient : IAsyncDisposable
     private const string SfccBase = $"{Base}/on/demandware.store/{SiteId}/default";
 
     private readonly HttpClient _http;
+    private readonly bool       _debug;
 
-    public GameStopClient()
+    public GameStopClient(bool debug = false)
     {
+        _debug = debug;
+
         var handler = new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.All,
             AllowAutoRedirect      = true,
-            UseCookies             = false,   // we manage nothing — intentional
+            UseCookies             = false,   // intentional — no auth cookies needed
         };
 
         _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
     }
 
+    /// <summary>
+    /// Fire a GET at a SFCC controller action with Chrome-equivalent headers.
+    /// </summary>
     public async Task<HttpResponseMessage> SfccGetAsync(
         string controllerAction,
-        string queryString    = "",
-        string? refererSku    = null,
-        CancellationToken ct  = default)
+        string queryString   = "",
+        string? refererSku   = null,
+        CancellationToken ct = default)
     {
-        var url      = $"{SfccBase}/{controllerAction}?{queryString}";
-        var referer  = refererSku != null
+        var url     = $"{SfccBase}/{controllerAction}?{queryString}";
+        var referer = refererSku is not null
             ? $"{Base}/products/{refererSku}"
             : $"{Base}/";
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
 
-        // Header order matches Chrome's wire order from HAR exactly
+        // Header order matches Chrome's wire order from HAR (sec-ch-ua before user-agent, etc.)
         req.Headers.TryAddWithoutValidation(":authority", "www.gamestop.com");
         req.Headers.TryAddWithoutValidation("accept", "application/json, text/javascript, */*; q=0.01");
         req.Headers.TryAddWithoutValidation("accept-encoding", "gzip, deflate, br, zstd");
@@ -74,7 +80,19 @@ public sealed class GameStopClient : IAsyncDisposable
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36");
         req.Headers.TryAddWithoutValidation("x-requested-with", "XMLHttpRequest");
 
-        return await _http.SendAsync(req, ct);
+        if (_debug)
+            Console.Error.WriteLine($"[DBG] GET {url}");
+
+        var sw  = Stopwatch.StartNew();
+        var res = await _http.SendAsync(req, ct);
+        sw.Stop();
+
+        if (_debug)
+            Console.Error.WriteLine(
+                $"[DBG] {(int)res.StatusCode} {res.StatusCode}  {sw.ElapsedMilliseconds}ms" +
+                $"  content-length={res.Content.Headers.ContentLength?.ToString() ?? "?"}");
+
+        return res;
     }
 
     public async ValueTask DisposeAsync()

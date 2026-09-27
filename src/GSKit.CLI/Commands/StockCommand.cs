@@ -2,14 +2,18 @@ using Spectre.Console;
 using GSKit.Core.Http;
 using GSKit.Core.Models;
 using GSKit.Core.Scrapers.Inventory;
+using GSKit.CLI.Output;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 
 namespace GSKit.CLI.Commands;
 
 public static class StockCommand
 {
-    public static async Task<int> RunAsync(string[] args, bool debug)
+    public static async Task<int> RunAsync(string[] args, RunContext ctx)
     {
+        // ── Parse args ────────────────────────────────────────────────────────
         string? sku         = null;
         string? zip         = null;
         double? lat         = null;
@@ -29,15 +33,15 @@ public static class StockCommand
                 case "--in-stock-only": inStockOnly = true; break;
                 case "--format":        format      = args[++i]; break;
                 default:
-                    if (sku == null && !args[i].StartsWith('-'))
+                    if (sku is null && !args[i].StartsWith('-'))
                         sku = args[i];
                     break;
             }
         }
 
-        if (sku == null)
+        if (sku is null)
         {
-            Err("SKU is required — e.g.  gskit stock 133857 --zip <zip>");
+            Log.Err("SKU required  →  gskit stock <sku> --zip <code>");
             return 1;
         }
 
@@ -48,51 +52,56 @@ public static class StockCommand
         {
             searchLat = lat.Value;
             searchLon = lon.Value;
+            Log.Dbg($"coords from args  {searchLat:F5}, {searchLon:F5}", ctx.Debug);
         }
-        else if (zip != null)
+        else if (zip is not null)
         {
-            Log("GEO", $"resolving {zip}");
+            Log.Geo($"resolving {zip}");
+            var sw = Stopwatch.StartNew();
             (searchLat, searchLon) = await GeocodingHelper.ZipToLatLonAsync(zip);
-            if (debug) Log("GEO", $"{searchLat:F5}, {searchLon:F5}");
+            Log.Dbg($"geocode in {sw.ElapsedMilliseconds}ms  →  {searchLat:F5}, {searchLon:F5}", ctx.Debug);
         }
         else
         {
-            Err("provide --zip or --lat/--long");
+            Log.Err("provide --zip <code>  or  --lat / --long");
             return 1;
         }
 
-        // ── Query ─────────────────────────────────────────────────────────────
-        Log("HTTP", $"Stores-FindStores  sku={sku}  radius={radius}mi");
+        // ── Fetch ─────────────────────────────────────────────────────────────
+        Log.Http($"Stores-FindStores  sku={sku}  radius={radius:F0}mi");
 
         InventoryResult result;
+        var timer = Stopwatch.StartNew();
         try
         {
-            await using var client = new GameStopClient();
+            await using var client = new GameStopClient(ctx.Debug);
             var scraper = new StoreInventory(client);
             result = await scraper.FindStoresAsync(
                 sku, searchLat, searchLon, radius,
-                captureRawJson: debug);
+                captureRawJson: ctx.Debug);
         }
         catch (CloudflareBlockException ex)
         {
-            Err(ex.Message);
+            Log.Err(ex.Message);
             return 1;
         }
         catch (Exception ex)
         {
-            Err(ex.Message);
-            if (debug) AnsiConsole.WriteException(ex);
+            Log.Err(ex.Message);
+            if (ctx.Debug) AnsiConsole.WriteException(ex);
             return 1;
         }
 
-        Log("OK", $"{result.TotalStores} stores · {result.InStockCount} in stock");
+        timer.Stop();
+        Log.Ok($"{result.TotalStores} stores · {result.InStockCount} in stock  [{timer.ElapsedMilliseconds}ms]");
 
-        if (debug && result.RawJson != null)
+        // ── Debug dump ────────────────────────────────────────────────────────
+        if (ctx.Debug && result.RawJson is not null)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.Write(new Rule("[dim]raw json[/]") { Justification = Justify.Left });
             AnsiConsole.WriteLine(result.RawJson);
-            AnsiConsole.Write(new Rule() { Justification = Justify.Left });
+            AnsiConsole.Write(new Rule() { Justification = Justify.Left, Style = Style.Parse("dim") });
             AnsiConsole.WriteLine();
         }
 
@@ -101,45 +110,59 @@ public static class StockCommand
         return format.ToLower() switch
         {
             "json" => OutputJson(result),
-            _      => OutputTable(result, inStockOnly),
+            _      => OutputTable(result, inStockOnly, ctx.Verbose),
         };
     }
 
-    private static int OutputTable(InventoryResult r, bool inStockOnly)
+    // ─────────────────────────────────────────────────────────────────────────
+    // Table renderer
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static int OutputTable(InventoryResult r, bool inStockOnly, bool verbose)
     {
         var inStock  = r.InStock.ToList();
         var outStock = r.OutOfStock.ToList();
 
-        AnsiConsole.Write(new Rule($"[green]IN STOCK[/] [dim]({inStock.Count})[/]")
-            { Justification = Justify.Left });
-        AnsiConsole.WriteLine();
-
-        if (inStock.Count == 0)
-            AnsiConsole.MarkupLine("  [dim]no stores with stock in this radius[/]");
-        else
+        // ── IN STOCK block ────────────────────────────────────────────────────
+        if (inStock.Count > 0)
         {
-            var t = MakeTable();
-            foreach (var s in inStock) AddRow(t, s);
-            AnsiConsole.Write(t);
-        }
-
-        if (!inStockOnly && outStock.Count > 0)
-        {
-            AnsiConsole.WriteLine();
-            AnsiConsole.Write(new Rule($"[dim]OUT OF STOCK ({outStock.Count})[/]")
+            AnsiConsole.Write(new Rule($"[green bold]IN STOCK[/] [dim]({inStock.Count})[/]")
                 { Justification = Justify.Left });
             AnsiConsole.WriteLine();
-            var t = MakeTable();
-            foreach (var s in outStock) AddRow(t, s);
+
+            var t = MakeTable(verbose);
+            foreach (var s in inStock) AddRow(t, s, inStock: true, verbose);
             AnsiConsole.Write(t);
         }
-        else if (inStockOnly && outStock.Count > 0)
+        else
+        {
+            AnsiConsole.Write(new Rule($"[dim]IN STOCK (0)[/]") { Justification = Justify.Left });
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[dim]  no stores carrying this SKU within the search radius[/]");
+        }
+
+        // ── OUT OF STOCK block ────────────────────────────────────────────────
+        if (!inStockOnly)
+        {
+            if (outStock.Count > 0)
+            {
+                AnsiConsole.WriteLine();
+                AnsiConsole.Write(new Rule($"[dim]OUT OF STOCK ({outStock.Count})[/]")
+                    { Justification = Justify.Left });
+                AnsiConsole.WriteLine();
+                var t = MakeTable(verbose);
+                foreach (var s in outStock) AddRow(t, s, inStock: false, verbose);
+                AnsiConsole.Write(t);
+            }
+        }
+        else if (outStock.Count > 0)
         {
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine(
-                $"  [dim]{outStock.Count} out-of-stock stores hidden  (remove --in-stock-only to show)[/]");
+                $"  [dim]{outStock.Count} out-of-stock store{(outStock.Count == 1 ? "" : "s")} hidden  (--in-stock-only)[/]");
         }
 
+        // ── Footer ────────────────────────────────────────────────────────────
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule() { Justification = Justify.Left, Style = Style.Parse("dim") });
         AnsiConsole.MarkupLine(
@@ -149,19 +172,30 @@ public static class StockCommand
         return 0;
     }
 
-    private static Table MakeTable() =>
-        new Table()
-            .BorderStyle(Style.Parse("dim"))
-            .Border(TableBorder.Simple)
-            .AddColumn(new TableColumn("[dim]STORE[/]"))
-            .AddColumn(new TableColumn("[dim]CITY[/]"))
-            .AddColumn(new TableColumn("[dim]ST[/]"))
-            .AddColumn(new TableColumn("[dim]DIST[/]"))
-            .AddColumn(new TableColumn("[dim]CONDITION[/]"))
-            .AddColumn(new TableColumn("[dim]HOURS[/]"));
-
-    private static void AddRow(Table table, Store s)
+    private static Table MakeTable(bool verbose)
     {
+        var t = new Table()
+            .BorderStyle(Style.Parse("grey23"))
+            .Border(TableBorder.Simple)
+            .AddColumn(new TableColumn("[grey85]STORE[/]"))
+            .AddColumn(new TableColumn("[grey85]CITY[/]"))
+            .AddColumn(new TableColumn("[grey85]ST[/]"))
+            .AddColumn(new TableColumn("[grey85]DIST[/]") { Alignment = Justify.Right })
+            .AddColumn(new TableColumn("[grey85]CONDITION[/]"))
+            .AddColumn(new TableColumn("[grey85]HOURS[/]"));
+
+        if (verbose)
+        {
+            t.AddColumn(new TableColumn("[grey85]ADDRESS[/]"));
+            t.AddColumn(new TableColumn("[grey85]PHONE[/]"));
+        }
+
+        return t;
+    }
+
+    private static void AddRow(Table table, Store s, bool inStock, bool verbose)
+    {
+        // Condition string
         var inStockConds = s.ConditionsInStock
             .Where(c => c.IsInStock)
             .Select(c => c.DisplayName)
@@ -171,26 +205,57 @@ public static class StockCommand
             ? string.Join(", ", inStockConds)
             : (s.IsInStock ? "In Stock" : "—");
 
-        var openStr = s.IsCurrentlyOpen switch
+        // Hours string
+        var hoursStr = s.IsCurrentlyOpen switch
         {
             true  => $"open until {s.TodayClosingTime ?? "?"}",
             false => "closed",
             null  => "—",
         };
 
-        var name  = Escape(s.Name.Length > 30 ? s.Name[..27] + "..." : s.Name);
-        var city  = Escape(s.City);
-        var state = Escape(s.StateCode);
+        // City / state — normalize ALL-CAPS that GameStop DB returns
+        var city  = TitleCase(s.City);
+        var state = s.StateCode.ToUpper();
+        var name  = Markup.Escape(s.Name.Length > 28 ? s.Name[..25] + "…" : s.Name);
         var dist  = $"{s.DistanceMiles:F1} mi";
-        var cond  = Escape(condStr.Length > 20 ? condStr[..17] + "…" : condStr);
-        var hours = Escape(openStr);
+        var cond  = Markup.Escape(condStr.Length > 22 ? condStr[..19] + "…" : condStr);
+        var hours = Markup.Escape(hoursStr);
 
-        string condMarkup = s.IsInStock
+        // Condition cell — green/yellow/dim
+        string condMarkup = inStock
             ? (s.IsLimitedStock ? $"[yellow]{cond}[/]" : $"[green]{cond}[/]")
             : $"[dim]{cond}[/]";
 
-        table.AddRow(name, city, state, $"[dim]{dist}[/]", condMarkup, $"[dim]{hours}[/]");
+        // Preferred store indicator
+        string nameMarkup = s.IsPreferredStore
+            ? $"[cyan bold]{name}[/] [dim cyan]★[/]"
+            : name;
+
+        var cells = new List<string>
+        {
+            nameMarkup,
+            Markup.Escape(city),
+            Markup.Escape(state),
+            $"[dim]{Markup.Escape(dist)}[/]",
+            condMarkup,
+            $"[dim]{hours}[/]",
+        };
+
+        if (verbose)
+        {
+            var addr = s.Address2 is { Length: > 0 }
+                ? $"{s.Address1}, {s.Address2}"
+                : s.Address1;
+            cells.Add($"[dim]{Markup.Escape(addr)}[/]");
+            cells.Add($"[dim]{Markup.Escape(s.Phone ?? "—")}[/]");
+        }
+
+        table.AddRow(cells.ToArray());
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // JSON renderer
+    // ─────────────────────────────────────────────────────────────────────────
 
     private static int OutputJson(InventoryResult r)
     {
@@ -208,8 +273,8 @@ public static class StockCommand
             {
                 id               = s.Id,
                 name             = s.Name,
-                address          = $"{s.Address1}{(s.Address2 != null ? ", " + s.Address2 : "")}",
-                city             = s.City,
+                address          = $"{s.Address1}{(s.Address2 is { Length: > 0 } ? ", " + s.Address2 : "")}",
+                city             = TitleCase(s.City),
                 state            = s.StateCode,
                 postal_code      = s.PostalCode,
                 phone            = s.Phone,
@@ -230,12 +295,6 @@ public static class StockCommand
         return 0;
     }
 
-    private static void Log(string tag, string msg) =>
-        AnsiConsole.MarkupLine($"[dim][[{tag}]][/] {Escape(msg)}");
-
-    private static void Err(string msg) =>
-        AnsiConsole.MarkupLine($"[red][[ERROR]][/] {Escape(msg)}");
-
-    private static string Escape(string s) =>
-        s.Replace("[", "[[").Replace("]", "]]");
+    private static string TitleCase(string s) =>
+        CultureInfo.CurrentCulture.TextInfo.ToTitleCase(s.ToLower());
 }

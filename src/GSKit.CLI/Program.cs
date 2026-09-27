@@ -1,47 +1,32 @@
 using GSKit.CLI.Commands;
+using GSKit.CLI.Output;
 using Spectre.Console;
 
-var args2 = args.ToList();
-bool debug   = args2.Remove("--debug");
-bool noColor = args2.Remove("--no-color");
+var argList = args.ToList();
+bool debug   = argList.Remove("--debug");
+bool noColor = argList.Remove("--no-color");
+bool verbose = argList.Remove("--verbose") || argList.Remove("-v");
 
 if (noColor) AnsiConsole.Profile.Capabilities.ColorSystem = ColorSystem.NoColors;
 
-if (args2.Count == 0 || args2[0] is "-h" or "--help")
+if (argList.Count == 0 || argList[0] is "-h" or "--help")
 {
-    PrintHelp();
+    HelpPrinter.Print();
     return 0;
 }
 
-return args2[0] switch
+var ctx = new RunContext(debug, verbose);
+
+return argList[0] switch
 {
-    "stock" => await StockCommand.RunAsync(args2.Skip(1).ToArray(), debug),
-    _       => UnknownCommand(args2[0]),
+    "stock" => await StockCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "info"  => await InfoCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "sdd"   => await SddCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    _       => Unknown(argList[0]),
 };
 
-static void PrintHelp()
+static int Unknown(string cmd)
 {
-    AnsiConsole.WriteLine();
-    AnsiConsole.Write(new Rule("[bold]gskit[/]") { Justification = Justify.Left });
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("  [bold]stock[/] [dim]<sku> [OPTIONS][/]"
-        .Replace("[OPTIONS]", "[[OPTIONS]]"));
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("  [dim]--zip <code>           search from US zip code[/]");
-    AnsiConsole.MarkupLine("  [dim]--lat / --long         coordinates (skips geocode)[/]");
-    AnsiConsole.MarkupLine("  [dim]--radius <miles>       search radius  (default: 100)[/]");
-    AnsiConsole.MarkupLine("  [dim]--in-stock-only        hide out-of-stock stores[/]");
-    AnsiConsole.MarkupLine("  [dim]--format table|json    output format  (default: table)[/]");
-    AnsiConsole.MarkupLine("  [dim]--debug                dump raw JSON response[/]");
-    AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --zip <zip>[/]");
-    AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --zip <zip> --in-stock-only[/]");
-    AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --lat <lat> --long <lon> --format json[/]");
-    AnsiConsole.WriteLine();
-}
-
-static int UnknownCommand(string cmd)
-{
-    AnsiConsole.MarkupLine($"[red][[ERROR]][/] unknown command: {cmd}  (try --help)");
+    Log.Err($"unknown command '{cmd}'  —  try --help");
     return 1;
 }
