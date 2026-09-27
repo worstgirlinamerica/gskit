@@ -2,7 +2,6 @@ using GSKit.CLI.Commands;
 using Spectre.Console;
 
 var args2 = args.ToList();
-
 bool debug   = args2.Remove("--debug");
 bool noColor = args2.Remove("--no-color");
 
@@ -25,14 +24,14 @@ static void PrintHelp()
     AnsiConsole.WriteLine();
     AnsiConsole.Write(new Rule("[bold]gskit[/]") { Justification = Justify.Left });
     AnsiConsole.WriteLine();
-    AnsiConsole.MarkupLine("  [bold]stock[/] [dim]<sku> [OPTIONS][/]");
+    AnsiConsole.MarkupLine("  [bold]stock[/] [dim]<sku> [OPTIONS][/]"
+        .Replace("[OPTIONS]", "[[OPTIONS]]"));
     AnsiConsole.WriteLine();
     AnsiConsole.MarkupLine("  [dim]--zip <code>           search from US zip code[/]");
     AnsiConsole.MarkupLine("  [dim]--lat / --long         coordinates (skips geocode)[/]");
     AnsiConsole.MarkupLine("  [dim]--radius <miles>       search radius  (default: 100)[/]");
     AnsiConsole.MarkupLine("  [dim]--in-stock-only        hide out-of-stock stores[/]");
     AnsiConsole.MarkupLine("  [dim]--format table|json    output format  (default: table)[/]");
-    AnsiConsole.MarkupLine("  [dim]--session 'k=v;k=v'   manual cookies (skips Chrome)[/]");
     AnsiConsole.MarkupLine("  [dim]--debug                dump raw JSON response[/]");
     AnsiConsole.WriteLine();
     AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --zip <zip>[/]");

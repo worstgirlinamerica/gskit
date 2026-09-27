@@ -3,3 +3,5 @@ obj/
 *.user
 .DS_Store
 .gskit/
+publish/
+publish-*/

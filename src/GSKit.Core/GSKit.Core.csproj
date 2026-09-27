@@ -3,14 +3,9 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
-
   <ItemGroup>
+    <!-- AngleSharp for HTML parsing (Phase 2+) -->
     <PackageReference Include="AngleSharp" Version="1.2.0" />
-    <!-- Use macOS system libsqlite3.dylib — no bundled native lib, no single-file issues -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="8.0.8" />
-    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.8" />
-    <PackageReference Include="SQLitePCLRaw.provider.sqlite3" Version="2.1.8" />
   </ItemGroup>
 </Project>

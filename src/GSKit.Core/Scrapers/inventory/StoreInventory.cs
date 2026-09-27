@@ -5,10 +5,8 @@ using GSKit.Core.Models;
 
 namespace GSKit.Core.Scrapers.Inventory;
 
-public class StoreInventory(SfccSession session)
+public sealed class StoreInventory(GameStopClient client)
 {
-    private readonly SfccSession _session = session;
-
     public async Task<InventoryResult> FindStoresAsync(
         string sku,
         double lat,
@@ -19,23 +17,24 @@ public class StoreInventory(SfccSession session)
         CancellationToken ct  = default)
     {
         var qs  = BuildQueryString(sku, lat, lon, radiusMiles, quantity);
-        var res = await _session.SfccGetAsync("Stores-FindStores", qs, ct);
+        var res = await client.SfccGetAsync("Stores-FindStores", qs, refererSku: sku, ct: ct);
+
+        var body = await res.Content.ReadAsStringAsync(ct);
 
         if (!res.IsSuccessStatusCode)
         {
-            var body = await res.Content.ReadAsStringAsync(ct);
             if (body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
                 throw new CloudflareBlockException(
-                    "Cloudflare blocked the request. " +
-                    "Open gamestop.com in Chrome then retry, or pass --session.");
+                    "Cloudflare is challenging this IP. " +
+                    "This usually means you're on a VPN or datacenter IP. " +
+                    "Try from a residential connection, or pass --session with cookies from your browser.");
 
             throw new HttpRequestException(
                 $"Stores-FindStores returned {(int)res.StatusCode}. " +
-                $"Body: {body[..Math.Min(500, body.Length)]}");
+                $"Body: {body[..Math.Min(400, body.Length)]}");
         }
 
-        var json = await res.Content.ReadAsStringAsync(ct);
-        return ParseResponse(json, sku, lat, lon, radiusMiles, captureRawJson);
+        return ParseResponse(body, sku, lat, lon, radiusMiles, captureRawJson);
     }
 
     public async Task<InventoryResult> FindStoresByZipAsync(
@@ -47,7 +46,7 @@ public class StoreInventory(SfccSession session)
     {
         var (lat, lon) = await GeocodingHelper.ZipToLatLonAsync(postalCode, ct);
         return await FindStoresAsync(sku, lat, lon, radiusMiles,
-                                    captureRawJson: captureRawJson, ct: ct);
+                                     captureRawJson: captureRawJson, ct: ct);
     }
 
     private static string BuildQueryString(
@@ -72,7 +71,7 @@ public class StoreInventory(SfccSession session)
         string json, string sku, double lat, double lon,
         double radius, bool captureRawJson)
     {
-        using var doc  = JsonDocument.Parse(json);
+        using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
         Store? preferredStore = null;
@@ -85,17 +84,20 @@ public class StoreInventory(SfccSession session)
             preferredId    = preferredStore.Id;
         }
 
-        var storeList = new List<Store>();
-
+        var stores = new List<Store>();
         if (root.TryGetProperty("stores", out var storesEl) &&
             storesEl.ValueKind == JsonValueKind.Array)
         {
             foreach (var el in storesEl.EnumerateArray())
-                storeList.Add(ParseStore(el));
+                stores.Add(ParseStore(el));
         }
 
-        if (preferredStore != null && storeList.All(s => s.Id != preferredId))
-            storeList.Insert(0, preferredStore);
+        // preferredStore is returned separately by the API — merge it in at correct distance position
+        if (preferredStore != null && stores.All(s => s.Id != preferredId))
+        {
+            stores.Add(preferredStore);
+            stores.Sort((a, b) => a.DistanceMiles.CompareTo(b.DistanceMiles));
+        }
 
         return new InventoryResult
         {
@@ -105,66 +107,48 @@ public class StoreInventory(SfccSession session)
             RadiusMiles = radius,
             FetchedAt   = DateTimeOffset.UtcNow,
             RawJson     = captureRawJson ? json : null,
-            Stores      = storeList,
+            Stores      = stores,
         };
     }
 
     private static Store ParseStore(JsonElement s)
     {
         var hours = new List<StoreHoursDisplay>();
-        if (s.TryGetProperty("hours", out var hoursArr) &&
-            hoursArr.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var h in hoursArr.EnumerateArray())
+        if (s.TryGetProperty("hours", out var ha) && ha.ValueKind == JsonValueKind.Array)
+            foreach (var h in ha.EnumerateArray())
                 hours.Add(new StoreHoursDisplay(
                     h.GetProperty("day").GetString()!,
-                    h.GetProperty("hours").GetString()!
-                ));
-        }
+                    h.GetProperty("hours").GetString()!));
 
         var conditions = new List<ConditionStock>();
-        if (s.TryGetProperty("conditionsEligibleForPickup", out var conds) &&
-            conds.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var c in conds.EnumerateArray())
+        if (s.TryGetProperty("conditionsEligibleForPickup", out var ca) &&
+            ca.ValueKind == JsonValueKind.Array)
+            foreach (var c in ca.EnumerateArray())
                 conditions.Add(new ConditionStock(
                     c.GetProperty("condition").GetString()!,
                     c.GetProperty("pid").GetString()!,
                     c.GetProperty("isInStock").GetBoolean(),
-                    c.GetProperty("displayName").GetString()!
-                ));
-        }
+                    c.GetProperty("displayName").GetString()!));
 
         var inventory = new List<SkuInventory>();
-        if (s.TryGetProperty("inventory", out var invArr) &&
-            invArr.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var i in invArr.EnumerateArray())
+        if (s.TryGetProperty("inventory", out var ia) && ia.ValueKind == JsonValueKind.Array)
+            foreach (var i in ia.EnumerateArray())
                 inventory.Add(new SkuInventory(
                     i.GetProperty("sku").GetString()!,
-                    i.TryGetProperty("count", out var cnt) ? cnt.GetInt32() : 0
-                ));
-        }
+                    i.TryGetProperty("count", out var cnt) ? cnt.GetInt32() : 0));
 
         StorePickupDetails? pickup = null;
         if (s.TryGetProperty("storePickupDetails", out var pd) &&
             pd.ValueKind == JsonValueKind.Object)
-        {
             pickup = new StorePickupDetails(
-                HopsEnabled:      GetBoolSafe(pd, "hopsEnabled"),
-                BopsEnabled:      GetBoolSafe(pd, "bopsEnabled"),
-                IspuEnabled:      GetBoolSafe(pd, "ispuEnabled"),
-                IsOnMilitaryBase: GetBoolSafe(pd, "isOnMilitaryBase")
-            );
-        }
+                Bool(pd, "hopsEnabled"), Bool(pd, "bopsEnabled"),
+                Bool(pd, "ispuEnabled"), Bool(pd, "isOnMilitaryBase"));
 
         double dist = 0;
-        if (s.TryGetProperty("distance", out var distEl))
+        if (s.TryGetProperty("distance", out var de))
         {
-            if (distEl.ValueKind == JsonValueKind.String)
-                double.TryParse(distEl.GetString(), out dist);
-            else if (distEl.ValueKind == JsonValueKind.Number)
-                dist = distEl.GetDouble();
+            if (de.ValueKind == JsonValueKind.String) double.TryParse(de.GetString(), out dist);
+            else if (de.ValueKind == JsonValueKind.Number) dist = de.GetDouble();
         }
 
         bool? isOpen = null;
@@ -186,24 +170,20 @@ public class StoreInventory(SfccSession session)
             Latitude:         s.GetProperty("latitude").GetDouble(),
             Longitude:        s.GetProperty("longitude").GetDouble(),
             DistanceMiles:    dist,
-            IsInStock:        GetBoolSafe(s, "isInStock"),
-            IsLimitedStock:   GetBoolSafe(s, "isLimitedStock"),
-            IsPreferredStore: GetBoolSafe(s, "isPreferredStore"),
+            IsInStock:        Bool(s, "isInStock"),
+            IsLimitedStock:   Bool(s, "isLimitedStock"),
+            IsPreferredStore: Bool(s, "isPreferredStore"),
             IsCurrentlyOpen:  isOpen,
             TodayClosingTime: s.TryGetProperty("todayClosingTime", out var tc) &&
                               tc.ValueKind == JsonValueKind.String ? tc.GetString() : null,
             StoreMode:        s.TryGetProperty("storeMode", out var sm) &&
-                              sm.ValueKind == JsonValueKind.String
-                              ? sm.GetString()! : "ACTIVE",
+                              sm.ValueKind == JsonValueKind.String ? sm.GetString()! : "ACTIVE",
             PickupDetails:    pickup,
             ConditionsInStock: conditions,
             Hours:            hours,
-            Inventory:        inventory
-        );
+            Inventory:        inventory);
     }
 
-    private static bool GetBoolSafe(JsonElement el, string prop)
+    private static bool Bool(JsonElement el, string prop)
         => el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.True;
 }
-
-public class CloudflareBlockException(string message) : Exception(message);
