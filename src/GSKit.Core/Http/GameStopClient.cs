@@ -62,7 +62,7 @@ public sealed class GameStopClient : IAsyncDisposable
 
         if (withCookies)
         {
-            var cookies = ChromeCookieReader.GetGameStopCookies();
+            var cookies = ChromeCookieReader.GetGameStopCookies(debug: _debug);
             if (cookies is { Length: > 0 })
             {
                 req.Headers.TryAddWithoutValidation("cookie", cookies);
@@ -123,42 +123,76 @@ public static class ChromeCookieReader
     private const string ChromeCookiePath =
         "/Users/{0}/Library/Application Support/Google/Chrome/Default/Cookies";
 
-    public static string? GetGameStopCookies()
+    public static string? GetGameStopCookies(bool debug = false)
     {
         try
         {
             var user = Environment.UserName;
             var path = string.Format(ChromeCookiePath, user);
-            if (!File.Exists(path)) return null;
+            if (!File.Exists(path))
+            {
+                if (debug) Console.Error.WriteLine($"[DBG] Chrome cookie DB not found at: {path}");
+                return null;
+            }
 
-            // Copy to temp — Chrome locks the file while running
-            var tmp = Path.GetTempFileName() + ".db";
+            // Copy DB + WAL/SHM files so we can open a consistent snapshot while Chrome runs
+            var tmp = Path.Combine(Path.GetTempPath(), $"gskit_cookies_{Guid.NewGuid():N}.db");
             File.Copy(path, tmp, overwrite: true);
+            foreach (var ext in new[] { "-wal", "-shm" })
+            {
+                var src2 = path + ext;
+                if (File.Exists(src2)) File.Copy(src2, tmp + ext, overwrite: true);
+            }
 
-            var key = GetChromeEncryptionKey();
-            if (key is null) return null;
+            var key = GetChromeEncryptionKey(debug);
+            if (key is null)
+            {
+                if (debug) Console.Error.WriteLine("[DBG] Could not get Chrome encryption key from Keychain");
+                File.Delete(tmp);
+                return null;
+            }
 
             var cookies = new List<string>();
-            using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={tmp};Mode=ReadOnly");
+            // immutable=1 prevents SQLite from trying to lock the copied file
+            using var conn = new SqliteConnection($"Data Source={tmp};Mode=ReadOnly;Pooling=False");
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT name, encrypted_value FROM cookies WHERE host_key LIKE '%gamestop.com' AND (name='cf_clearance' OR name LIKE '__cq%' OR name='dwanonymous_' OR name='sid')";
+            // Grab cf_clearance and common SFCC session cookies for gamestop.com
+            cmd.CommandText = @"
+                SELECT name, encrypted_value
+                FROM cookies
+                WHERE host_key LIKE '%gamestop.com'
+                  AND (   name = 'cf_clearance'
+                       OR name LIKE '__cq%'
+                       OR name LIKE 'dwanonymous%'
+                       OR name = 'sid'
+                       OR name = 'dwsid')";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 var name = reader.GetString(0);
                 var enc  = (byte[])reader[1];
                 var val  = DecryptChromeValue(enc, key);
+                if (debug) Console.Error.WriteLine($"[DBG] cookie {name}: {(val is null ? "DECRYPT_FAILED" : $"{val[..Math.Min(20,val.Length)]}…")}");
                 if (val is { Length: > 0 }) cookies.Add($"{name}={val}");
             }
             conn.Close();
-            File.Delete(tmp);
+
+            // Cleanup temp files
+            foreach (var ext in new[] { "", "-wal", "-shm" })
+                try { File.Delete(tmp + ext); } catch { }
+
+            if (debug) Console.Error.WriteLine($"[DBG] found {cookies.Count} gamestop.com cookie(s) in Chrome");
             return cookies.Count > 0 ? string.Join("; ", cookies) : null;
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[DBG] ChromeCookieReader failed: {ex.Message}");
+            return null;
+        }
     }
 
-    private static byte[]? GetChromeEncryptionKey()
+    private static byte[]? GetChromeEncryptionKey(bool debug = false)
     {
         try
         {
@@ -177,10 +211,12 @@ public static class ChromeCookieReader
             if (pass.Length == 0) return null;
 
             // PBKDF2-SHA1: password=ChromeSafeStorageKey, salt="saltysalt", iter=1003, keylen=16
-            using var deriv = new System.Security.Cryptography.Rfc2898DeriveBytes(
-                pass, System.Text.Encoding.UTF8.GetBytes("saltysalt"),
-                1003, System.Security.Cryptography.HashAlgorithmName.SHA1);
-            return deriv.GetBytes(16);
+            return System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(
+                System.Text.Encoding.UTF8.GetBytes(pass),
+                System.Text.Encoding.UTF8.GetBytes("saltysalt"),
+                1003,
+                System.Security.Cryptography.HashAlgorithmName.SHA1,
+                16);
         }
         catch { return null; }
     }

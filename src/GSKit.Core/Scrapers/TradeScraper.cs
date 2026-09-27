@@ -41,11 +41,22 @@ public sealed class TradeScraper(GameStopClient client)
             refererSku: null, withCookies: true, ct: ct);
         var body = await res.Content.ReadAsStringAsync(ct);
 
-        // CF sometimes returns block pages with 200 OK — check body before status
-        if (body.Contains("Attention Required") || body.Contains("cf-error-details") ||
-            body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
-            throw new CloudflareBlockException(
-                "Trade-GetSuggestions is CF-blocked. This endpoint requires cookies from a live browser session — run gskit from your Mac with Chrome cookies available, or capture the response in a HAR first.");
+        // CF block pages arrive with 200 OK — detect by content, not status.
+        // The body starts with '<' when it's any HTML (CF challenge, error page, or redirect).
+        var trimmed = body.TrimStart();
+        if (trimmed.StartsWith('<'))
+        {
+            // Emit the first 300 chars so the caller can see what GS returned
+            var snippet = body[..Math.Min(300, body.Length)].Replace("\n", " ");
+            if (body.Contains("cf-error-details") || body.Contains("Attention Required") ||
+                body.Contains("cf-browser-verification") || body.Contains("Checking your browser") ||
+                body.Contains("enable_cookies"))
+                throw new CloudflareBlockException(
+                    $"Trade-GetSuggestions is CF-blocked (needs Chrome cookies). " +
+                    $"Open gamestop.com/trade/ in Chrome first, then retry.\nResponse: {snippet}");
+            throw new HttpRequestException(
+                $"Trade-GetSuggestions returned HTML instead of JSON (status {(int)res.StatusCode}).\nResponse: {snippet}");
+        }
 
         if (!res.IsSuccessStatusCode)
             throw new HttpRequestException(
@@ -94,10 +105,12 @@ public sealed class TradeScraper(GameStopClient client)
         // Trade-Show uses text/html Accept — override for this call
         var body = await res.Content.ReadAsStringAsync(ct);
 
-        if (body.Contains("Attention Required") || body.Contains("cf-error-details") ||
-            body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
+        var trimmedShow = body.TrimStart();
+        if (trimmedShow.StartsWith('<') && (body.Contains("cf-error-details") || body.Contains("Attention Required") ||
+            body.Contains("cf-browser-verification") || body.Contains("enable_cookies")))
             throw new CloudflareBlockException(
-                "Trade-Show is CF-blocked. Needs cookies from a live browser session.");
+                $"Trade-Show is CF-blocked (needs Chrome cookies). Open gamestop.com/trade/ in Chrome first.\n" +
+                $"Response: {body[..Math.Min(300, body.Length)]}");
 
         if (!res.IsSuccessStatusCode)
             throw new HttpRequestException(
