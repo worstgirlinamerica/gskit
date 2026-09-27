@@ -7,6 +7,5 @@
   <ItemGroup>
     <!-- AngleSharp for HTML parsing (Phase 2+) -->
     <PackageReference Include="AngleSharp" Version="1.2.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
   </ItemGroup>
 </Project>

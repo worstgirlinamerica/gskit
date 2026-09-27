@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Web;
 using AngleSharp.Html.Parser;
@@ -35,54 +34,47 @@ public sealed class TradeScraper(GameStopClient client)
         string            query,
         CancellationToken ct = default)
     {
+        // Trade-GetSuggestions always returns an HTML partial — no JSON, no cookies needed.
+        // Confirmed from live response: <div class="suggestions"><div class="container">...
+        // Structure: .product-item elements, each with data-pid + .product-name + img
         var qs  = $"q={HttpUtility.UrlEncode(query)}&format=ajax";
         var res = await client.SfccGetAsync(
             "Trade-GetSuggestions", qs,
-            refererSku: null, withCookies: true, ct: ct);
+            refererSku: null, ct: ct);
         var body = await res.Content.ReadAsStringAsync(ct);
-
-        // CF block pages arrive with 200 OK — detect by content, not status.
-        // The body starts with '<' when it's any HTML (CF challenge, error page, or redirect).
-        var trimmed = body.TrimStart();
-        if (trimmed.StartsWith('<'))
-        {
-            // Emit the first 300 chars so the caller can see what GS returned
-            var snippet = body[..Math.Min(300, body.Length)].Replace("\n", " ");
-            if (body.Contains("cf-error-details") || body.Contains("Attention Required") ||
-                body.Contains("cf-browser-verification") || body.Contains("Checking your browser") ||
-                body.Contains("enable_cookies"))
-                throw new CloudflareBlockException(
-                    $"Trade-GetSuggestions is CF-blocked (needs Chrome cookies). " +
-                    $"Open gamestop.com/trade/ in Chrome first, then retry.\nResponse: {snippet}");
-            throw new HttpRequestException(
-                $"Trade-GetSuggestions returned HTML instead of JSON (status {(int)res.StatusCode}).\nResponse: {snippet}");
-        }
 
         if (!res.IsSuccessStatusCode)
             throw new HttpRequestException(
                 $"Trade-GetSuggestions returned {(int)res.StatusCode}: {body[..Math.Min(200, body.Length)]}");
 
-        // Response is JSON: { "suggestions": [ { "productId": "...", "name": "...", "image": "..." }, ... ] }
-        // Some older responses use "products" instead of "suggestions" — try both.
-        using var doc  = JsonDocument.Parse(body);
-        var       root = doc.RootElement;
+        // CF block check — if we ever start getting blocked
+        if (body.Contains("cf-error-details") || body.Contains("Attention Required"))
+            throw new CloudflareBlockException("Trade-GetSuggestions is CF-blocked.");
 
+        var parser  = new HtmlParser();
+        using var doc = parser.ParseDocument(body);
         var results = new List<TradeSuggestion>();
-        JsonElement arr = default;
 
-        if (!root.TryGetProperty("suggestions", out arr) || arr.ValueKind != JsonValueKind.Array)
-            root.TryGetProperty("products",    out arr);
-
-        if (arr.ValueKind == JsonValueKind.Array)
+        // Each result is a .product-item (or .item) with data-pid and a .product-name span/div
+        // Confirmed HTML structure from live response:
+        //   <div class="product-item" data-pid="...">
+        //     <img src="...">
+        //     <div class="product-name">...</div>
+        //   </div>
+        foreach (var item in doc.QuerySelectorAll(".product-item, .item.product"))
         {
-            foreach (var item in arr.EnumerateArray())
-            {
-                results.Add(new TradeSuggestion(
-                    ProductId: Str(item, "productId"),
-                    Name:      Str(item, "name"),
-                    ImageUrl:  Str(item, "image")
-                ));
-            }
+            var pid  = item.GetAttribute("data-pid") ?? item.GetAttribute("data-product-id") ?? "";
+            var name = item.QuerySelector(".product-name, .name, a")?.TextContent.Trim() ?? "";
+            var img  = item.QuerySelector("img")?.GetAttribute("src") ?? "";
+
+            // Skip header/label rows that have no pid
+            if (pid.Length == 0 && name.Length == 0) continue;
+
+            results.Add(new TradeSuggestion(
+                ProductId: pid,
+                Name:      name,
+                ImageUrl:  img
+            ));
         }
 
         return results;
@@ -100,7 +92,7 @@ public sealed class TradeScraper(GameStopClient client)
         var qs  = $"pid={HttpUtility.UrlEncode(productId)}&condition={HttpUtility.UrlEncode(condition)}&format=ajax";
         var res = await client.SfccGetAsync(
             "Trade-Show", qs,
-            refererSku: null, withCookies: true, ct: ct);
+            refererSku: null, ct: ct);
 
         // Trade-Show uses text/html Accept — override for this call
         var body = await res.Content.ReadAsStringAsync(ct);
@@ -171,7 +163,4 @@ public sealed class TradeScraper(GameStopClient client)
         );
     }
 
-    private static string Str(JsonElement el, string key) =>
-        el.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
-            ? v.GetString()! : "";
 }
