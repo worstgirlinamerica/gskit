@@ -118,41 +118,22 @@ public static class StockCommand
         var inStock  = r.InStock.ToList();
         var outStock = r.OutOfStock.ToList();
 
-        if (inStock.Count > 0)
+        // Single unified table — all stores together, sorted distance asc
+        var all = inStock.Concat(inStockOnly ? [] : outStock).ToList();
+
+        if (inStock.Count == 0)
         {
-            AnsiConsole.Write(new Rule($"[green]IN STOCK[/] [dim]({inStock.Count})[/]")
-                { Justification = Justify.Left });
-            AnsiConsole.WriteLine();
-            var t = MakeTable(verbose);
-            foreach (var s in inStock) AddRow(t, s, inStock: true, verbose);
-            AnsiConsole.Write(t);
-        }
-        else
-        {
-            AnsiConsole.Write(new Rule("[dim]IN STOCK (0)[/]") { Justification = Justify.Left });
-            AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[dim]  no stores within the search radius have this SKU[/]");
+            AnsiConsole.WriteLine();
         }
 
-        if (!inStockOnly)
-        {
-            if (outStock.Count > 0)
-            {
-                AnsiConsole.WriteLine();
-                AnsiConsole.Write(new Rule($"[dim]OUT OF STOCK ({outStock.Count})[/]")
-                    { Justification = Justify.Left });
-                AnsiConsole.WriteLine();
-                var t = MakeTable(verbose);
-                foreach (var s in outStock) AddRow(t, s, inStock: false, verbose);
-                AnsiConsole.Write(t);
-            }
-        }
-        else if (outStock.Count > 0)
-        {
-            AnsiConsole.WriteLine();
+        var t = MakeTable(verbose);
+        foreach (var s in all) AddRow(t, s, verbose);
+        AnsiConsole.Write(t);
+
+        if (inStockOnly && outStock.Count > 0)
             AnsiConsole.MarkupLine(
                 $"  [dim]{outStock.Count} out-of-stock store{(outStock.Count == 1 ? "" : "s")} hidden  (--in-stock-only)[/]");
-        }
 
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule() { Justification = Justify.Left, Style = Style.Parse("dim") });
@@ -172,9 +153,8 @@ public static class StockCommand
             .AddColumn(new TableColumn("[dim]CITY[/]"))
             .AddColumn(new TableColumn("[dim]ST[/]"))
             .AddColumn(new TableColumn("[dim]DIST[/]") { Alignment = Justify.Right })
-            .AddColumn(new TableColumn("[dim]QTY[/]")  { Alignment = Justify.Right })
             .AddColumn(new TableColumn("[dim]CONDITION[/]"))
-            .AddColumn(new TableColumn("[dim]TODAY[/]"));
+            .AddColumn(new TableColumn("[dim]HOURS[/]"));
 
         if (verbose)
         {
@@ -185,8 +165,10 @@ public static class StockCommand
         return t;
     }
 
-    private static void AddRow(Table table, Store s, bool inStock, bool verbose)
+    private static void AddRow(Table table, Store s, bool verbose)
     {
+        var inStock = s.IsInStock;
+
         var inStockConds = s.ConditionsEligibleForPickup
             .Where(c => c.IsInStock)
             .Select(c => c.DisplayName)
@@ -194,57 +176,43 @@ public static class StockCommand
 
         var condStr = inStockConds.Count > 0
             ? string.Join(", ", inStockConds)
-            : (s.IsInStock ? "In Stock" : "—");
+            : (inStock ? "In Stock" : "—");
 
-        // Hours: show today's open–close range, with open/closed indicator
-        string hoursStr;
         var today = s.TodayHours;
-        if (today is not null)
-        {
-            var isOpen = s.IsCurrentlyOpen;
-            var range  = today.Display;
-            hoursStr = isOpen switch
+        string hoursMarkup = today is not null
+            ? s.IsCurrentlyOpen switch
             {
-                true  => $"open  {range}",
-                false => $"closed  {range}",
-                null  => range,
-            };
-        }
-        else
-        {
-            hoursStr = "—";
-        }
+                true  => $"[green]{Markup.Escape(today.Display)}[/]",
+                false => $"[dim]{Markup.Escape(today.Display)}[/]",
+                null  => $"[dim]{Markup.Escape(today.Display)}[/]",
+            }
+            : "[dim]—[/]";
 
-        var city = TitleCase(s.City);
-        var name = Markup.Escape(s.Name.Length > 28 ? s.Name[..25] + "…" : s.Name);
         var dist = $"{s.DistanceMiles:F1} mi";
         var cond = Markup.Escape(condStr.Length > 22 ? condStr[..19] + "…" : condStr);
-        var qty  = s.StockCount > 0 ? $"{s.StockCount}" : "—";
+
+        // Preferred store gets blue, in-stock gets green/yellow, out gets dim
+        string nameMarkup;
+        if (s.IsPreferredStore)
+            nameMarkup = $"[dodgerblue2]{Markup.Escape(s.Name.Length > 28 ? s.Name[..25] + "…" : s.Name)}[/]";
+        else if (inStock)
+            nameMarkup = Markup.Escape(s.Name.Length > 28 ? s.Name[..25] + "…" : s.Name);
+        else
+            nameMarkup = $"[dim]{Markup.Escape(s.Name.Length > 28 ? s.Name[..25] + "…" : s.Name)}[/]";
 
         string condMarkup = inStock
             ? (s.IsLimitedStock ? $"[yellow]{cond}[/]" : $"[green]{cond}[/]")
             : $"[dim]{cond}[/]";
 
-        string qtyMarkup = inStock && s.StockCount > 0
-            ? (s.StockCount <= 2 ? $"[yellow]{qty}[/]" : $"[green]{qty}[/]")
-            : $"[dim]{qty}[/]";
-
-        string hoursMarkup = today is not null
-            ? s.IsCurrentlyOpen switch
-            {
-                true  => $"[green]open[/]  [dim]{Markup.Escape(today.Display)}[/]",
-                false => $"[dim]closed  {Markup.Escape(today.Display)}[/]",
-                null  => $"[dim]{Markup.Escape(hoursStr)}[/]",
-            }
-            : "[dim]—[/]";
+        var cityStr = Markup.Escape(TitleCase(s.City));
+        string cityMarkup = s.IsPreferredStore ? $"[dodgerblue2]{cityStr}[/]" : (inStock ? cityStr : $"[dim]{cityStr}[/]");
 
         var cells = new List<string>
         {
-            name,
-            Markup.Escape(city),
-            Markup.Escape(s.StateCode.ToUpper()),
-            $"[dim]{Markup.Escape(dist)}[/]",
-            qtyMarkup,
+            nameMarkup,
+            cityMarkup,
+            inStock ? Markup.Escape(s.StateCode.ToUpper()) : $"[dim]{Markup.Escape(s.StateCode.ToUpper())}[/]",
+            inStock ? $"[dim]{Markup.Escape(dist)}[/]" : $"[dim]{Markup.Escape(dist)}[/]",
             condMarkup,
             hoursMarkup,
         };
@@ -263,7 +231,6 @@ public static class StockCommand
     private static int OutputJson(InventoryResult r)
     {
         var opts = new JsonSerializerOptions { WriteIndented = true };
-        // JSON goes to stdout only — no log lines, safe to pipe/redirect
         Console.WriteLine(JsonSerializer.Serialize(new
         {
             sku            = r.Sku,
@@ -284,8 +251,8 @@ public static class StockCommand
                 phone            = s.Phone,
                 distance_miles   = s.DistanceMiles,
                 is_in_stock      = s.IsInStock,
-                stock_count      = s.StockCount,
                 is_limited_stock = s.IsLimitedStock,
+                is_preferred     = s.IsPreferredStore,
                 is_open          = s.IsCurrentlyOpen,
                 today_hours      = s.TodayHours?.Display,
                 conditions       = s.ConditionsEligibleForPickup.Select(c => new
@@ -295,8 +262,8 @@ public static class StockCommand
                 }),
                 hours = s.OperationHours.Select(h => new
                 {
-                    day     = h.Day,
-                    hours   = h.Display,
+                    day   = h.Day,
+                    hours = h.Display,
                 }),
             }),
         }, opts));
