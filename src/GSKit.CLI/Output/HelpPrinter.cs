@@ -11,32 +11,48 @@ public static class HelpPrinter
         AnsiConsole.WriteLine();
 
         Section("USAGE");
-        Cmd("gskit stock <sku> [OPTIONS]",    "locate inventory near a zip code");
-        Cmd("gskit info  <sku> [OPTIONS]",    "fetch product info: title, price, availability");
-        Cmd("gskit sdd   <sku>",              "check same-day delivery eligibility");
+        Cmd("gskit stock <sku> [OPTIONS]",   "locate inventory near a zip code");
+        Cmd("gskit info  <sku> [OPTIONS]",   "fetch product info: title, price, availability");
+        Cmd("gskit sdd   <sku>",             "check same-day delivery eligibility");
         AnsiConsole.WriteLine();
 
-        Section("LOCATION OPTIONS");
-        Opt("--zip <code>",          "resolve from US zip code (uses census geocoder)");
-        Opt("--lat / --long <n>",    "raw coordinates — skips geocoding");
-        Opt("--radius <miles>",      "search radius, default 100");
+        Section("LOCATION OPTIONS  (stock)");
+        Opt("--zip <code>",        "resolve from US zip code (uses census geocoder)");
+        Opt("--lat / --long <n>",  "raw coordinates — skips geocoding");
+        Opt("--radius <miles>",    "search radius, default 100");
         AnsiConsole.WriteLine();
 
         Section("OUTPUT OPTIONS");
-        Opt("--in-stock-only",       "hide out-of-stock stores");
-        Opt("--verbose, -v",         "show address + phone on each store row");
-        Opt("--format table|json",   "output format, default table");
-        Opt("--no-color",            "disable ANSI color (pipe / log-file safe)");
-        Opt("--debug",               "print raw JSON responses and timing");
+        Opt("--in-stock-only",     "hide out-of-stock stores");
+        Opt("--verbose, -v",       "show address + phone on each store row");
+        Opt("--format table|json", "output format, default table");
+        Opt("--no-color",          "disable ANSI color (pipe / log-file safe)");
+        Opt("--debug",             "print raw HTTP requests, responses, and JSON");
+        Opt("--version",           "print version and exit");
+        AnsiConsole.WriteLine();
+
+        Section("CONFIG");
+        AnsiConsole.MarkupLine($"  [dim]~/.config/gskit/config.json[/]");
+        AnsiConsole.MarkupLine($"  [dim]  {{[/]");
+        AnsiConsole.MarkupLine($"  [dim]    \"defaultZip\":    \"<zip>\",[/]");
+        AnsiConsole.MarkupLine($"  [dim]    \"defaultRadius\": 100[/]");
+        AnsiConsole.MarkupLine($"  [dim]  }}[/]");
         AnsiConsole.WriteLine();
 
         Section("EXAMPLES");
-        AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --zip <zip>[/]");
-        AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --zip <zip> --in-stock-only -v[/]");
-        AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --lat <lat> --long <lon> --format json[/]");
-        AnsiConsole.MarkupLine("  [dim]gskit info  133857[/]");
-        AnsiConsole.MarkupLine("  [dim]gskit sdd   133857[/]");
-        AnsiConsole.MarkupLine("  [dim]gskit stock 133857 --zip <zip> --debug[/]");
+        Ex("gskit stock 133857 --zip <zip>");
+        Ex("gskit stock 133857 --zip <zip> --in-stock-only -v");
+        Ex("gskit stock 133857 --zip <zip> --format json");
+        Ex("gskit stock 133857 --lat <lat> --long <lon>");
+        Ex("gskit info  133857");
+        Ex("gskit info  133857 --debug");
+        Ex("gskit sdd   133857");
+        AnsiConsole.WriteLine();
+
+        Section("NOTE");
+        AnsiConsole.MarkupLine("  [dim]When using dotnet run, pass -- before gskit args:[/]");
+        AnsiConsole.MarkupLine("  [dim]  dotnet run --project src/GSKit.CLI -- stock 133857 --zip <zip>[/]");
+        AnsiConsole.MarkupLine("  [dim]  dotnet run --project src/GSKit.CLI -- --help[/]");
         AnsiConsole.WriteLine();
     }
 
@@ -44,8 +60,11 @@ public static class HelpPrinter
         AnsiConsole.MarkupLine($"[bold grey85]{name}[/]");
 
     private static void Cmd(string usage, string desc) =>
-        AnsiConsole.MarkupLine($"  [cyan]{Markup.Escape(usage)}[/]");
+        AnsiConsole.MarkupLine($"  [cyan]{Markup.Escape(usage),-36}[/] [dim]{Markup.Escape(desc)}[/]");
 
     private static void Opt(string flag, string desc) =>
-        AnsiConsole.MarkupLine($"  [grey85]{Markup.Escape(flag),-28}[/] [dim]{Markup.Escape(desc)}[/]");
+        AnsiConsole.MarkupLine($"  [grey85]{Markup.Escape(flag),-26}[/] [dim]{Markup.Escape(desc)}[/]");
+
+    private static void Ex(string cmd) =>
+        AnsiConsole.MarkupLine($"  [dim]{Markup.Escape(cmd)}[/]");
 }
