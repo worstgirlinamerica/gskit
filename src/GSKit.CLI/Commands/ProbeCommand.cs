@@ -9,9 +9,10 @@ namespace GSKit.CLI.Commands;
 /// <summary>
 /// gskit probe &lt;sku&gt; --store &lt;storeId&gt; --zip &lt;zip&gt;
 ///
-/// Dev/debug command — fires Stores-FindStores with selectedStore=&lt;id&gt;
-/// so that store becomes preferredStore and inventory[] gets populated.
-/// Dumps the raw inventory + condition data so we can see real counts.
+/// Dev/debug command. Full session flow:
+///   1. GET homepage → dwsid + dwanonymous_ cookies
+///   2. POST Stores-UpdateInStoreShipmentID → pins store into session
+///   3. GET Stores-FindStores?selectedStore=&lt;id&gt; → preferredStore now has inventory[]
 /// </summary>
 public static class ProbeCommand
 {
@@ -62,14 +63,23 @@ public static class ProbeCommand
             return 1;
         }
 
-        Log.Http($"Stores-FindStores  sku={sku}  selectedStore={storeId}");
-        var sw = Stopwatch.StartNew();
-
         await using var client = new GameStopClient(ctx.Debug);
+
+        // Step 1: init session
+        Log.Info("step 1  →  init session (GET homepage)");
+        await client.EnsureSessionAsync();
+
+        // Step 2: pin the store
+        Log.Info($"step 2  →  pin store {storeId} into session");
+        await client.SetPreferredStoreAsync(storeId, sku);
+
+        // Step 3: query with selectedStore
+        Log.Http($"step 3  →  Stores-FindStores  sku={sku}  selectedStore={storeId}");
+        var sw = Stopwatch.StartNew();
         var scraper = new StoreInventory(client);
         var raw = await scraper.ProbeStoreInventoryAsync(sku, storeId, searchLat, searchLon, radius);
-
         sw.Stop();
+
         Log.Ok($"done  [[{sw.ElapsedMilliseconds}ms]]");
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine(raw);
