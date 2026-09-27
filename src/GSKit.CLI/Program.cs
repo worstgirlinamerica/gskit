@@ -8,7 +8,6 @@ bool debug   = argList.Remove("--debug");
 bool noColor = argList.Remove("--no-color");
 bool verbose = argList.Remove("--verbose") || argList.Remove("-v");
 
-// Detect --format json early so we can suppress log output before any command runs
 int fmtIdx = argList.IndexOf("--format");
 bool jsonMode = fmtIdx >= 0 && fmtIdx + 1 < argList.Count &&
                 argList[fmtIdx + 1].Equals("json", StringComparison.OrdinalIgnoreCase);
@@ -59,6 +58,7 @@ return argList[0] switch
     "stock" => await StockCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
     "info"  => await InfoCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
     "sdd"   => await SddCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "probe" => await ProbeCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
     _       => Unknown(argList[0]),
 };
 

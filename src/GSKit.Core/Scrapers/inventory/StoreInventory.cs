@@ -16,7 +16,7 @@ public sealed class StoreInventory(GameStopClient client)
         bool   captureRawJson = false,
         CancellationToken ct  = default)
     {
-        var qs  = BuildQueryString(sku, lat, lon, radiusMiles, quantity);
+        var qs  = BuildQueryString(sku, lat, lon, radiusMiles, quantity, selectedStore: null);
         var res = await client.SfccGetAsync("Stores-FindStores", qs, refererSku: sku, ct: ct);
 
         var body = await res.Content.ReadAsStringAsync(ct);
@@ -37,6 +37,57 @@ public sealed class StoreInventory(GameStopClient client)
         return ParseResponse(body, sku, lat, lon, radiusMiles, captureRawJson);
     }
 
+    /// <summary>
+    /// Fire a single Stores-FindStores call with selectedStore=<storeId>.
+    /// When a store is selected it becomes preferredStore and gets inventory[] populated.
+    /// Returns the raw preferredStore inventory[] so we can see real counts.
+    /// </summary>
+    public async Task<string> ProbeStoreInventoryAsync(
+        string sku,
+        string storeId,
+        double lat,
+        double lon,
+        double radiusMiles   = 100.0,
+        CancellationToken ct = default)
+    {
+        var qs  = BuildQueryString(sku, lat, lon, radiusMiles, 1, selectedStore: storeId);
+        var res = await client.SfccGetAsync("Stores-FindStores", qs, refererSku: sku, ct: ct);
+        var body = await res.Content.ReadAsStringAsync(ct);
+
+        if (!res.IsSuccessStatusCode)
+            return $"HTTP {(int)res.StatusCode}: {body[..Math.Min(200, body.Length)]}";
+
+        using var doc  = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+
+        if (!root.TryGetProperty("preferredStore", out var ps))
+            return "no preferredStore in response";
+
+        // Extract just the fields we care about
+        var result = new
+        {
+            store_id  = ps.TryGetProperty("ID",   out var id)   ? id.GetString()  : "?",
+            name      = ps.TryGetProperty("name", out var nm)   ? nm.GetString()?.Trim() : "?",
+            isInStock = ps.TryGetProperty("isInStock", out var iis) && iis.GetBoolean(),
+            inventory = ps.TryGetProperty("inventory", out var inv) && inv.ValueKind == JsonValueKind.Array
+                ? inv.EnumerateArray().Select(i => new
+                  {
+                      sku   = i.TryGetProperty("sku",   out var s) ? s.GetString() : "?",
+                      count = i.TryGetProperty("count", out var c) ? c.GetInt32()  : -1,
+                  }).ToList()
+                : [],
+            conditionsEligibleForPickup = ps.TryGetProperty("conditionsEligibleForPickup", out var cefp) && cefp.ValueKind == JsonValueKind.Array
+                ? cefp.EnumerateArray().Select(c => new
+                  {
+                      condition = c.TryGetProperty("condition",   out var cn) ? cn.GetString() : "?",
+                      isInStock = c.TryGetProperty("isInStock",   out var ci) && ci.GetBoolean(),
+                  }).ToList()
+                : [],
+        };
+
+        return JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+    }
+
     public async Task<InventoryResult> FindStoresByZipAsync(
         string sku,
         string postalCode,
@@ -50,9 +101,11 @@ public sealed class StoreInventory(GameStopClient client)
     }
 
     private static string BuildQueryString(
-        string sku, double lat, double lon, double radius, int qty)
+        string sku, double lat, double lon, double radius, int qty,
+        string? selectedStore)
     {
         var products = HttpUtility.UrlEncode($"{sku}:{qty}");
+        var sel      = selectedStore is { Length: > 0 } ? selectedStore : "undefined";
         return string.Join("&",
             "hasCondition=true",
             "hasVariantsAvailableForLookup=true",
@@ -60,7 +113,7 @@ public sealed class StoreInventory(GameStopClient client)
             "source=pdp",
             "showMap=false",
             $"products={products}",
-            "selectedStore=undefined",
+            $"selectedStore={sel}",
             $"lat={lat}",
             $"long={lon}",
             $"radius={radius:F1}"
@@ -109,7 +162,6 @@ public sealed class StoreInventory(GameStopClient client)
 
     private static Store ParseStore(JsonElement s)
     {
-        // storeOperationHours is a JSON-encoded string: "[{\"day\":\"Sun\",\"open\":\"1000\",\"close\":\"1900\"},...]"
         var hours = new List<StoreHours>();
         if (s.TryGetProperty("storeOperationHours", out var soh) &&
             soh.ValueKind == JsonValueKind.String)
@@ -132,7 +184,6 @@ public sealed class StoreInventory(GameStopClient client)
             }
         }
 
-        // conditionsEligibleForPickup is the authoritative list — has isInStock per condition
         var conditions = new List<ConditionStock>();
         if (s.TryGetProperty("conditionsEligibleForPickup", out var ca) &&
             ca.ValueKind == JsonValueKind.Array)
