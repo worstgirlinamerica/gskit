@@ -93,7 +93,7 @@ public static class StockCommand
 
         var inCount = result.InStockCount;
         var total   = result.TotalStores;
-        Log.Ok($"{total} stores  ·  {Log.Hl(inCount > 0 ? $"{inCount} in stock" : "0 in stock", inCount > 0 ? "green bold" : "dim")}  [{timer.ElapsedMilliseconds}ms]");
+        Log.Ok($"{total} stores  ·  {Log.Hl(inCount > 0 ? $"{inCount} in stock" : "0 in stock", inCount > 0 ? "green bold" : "dim")}  [[{timer.ElapsedMilliseconds}ms]]");
 
         if (ctx.Debug && result.RawJson is not null)
         {
