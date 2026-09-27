@@ -15,6 +15,8 @@ public static class HelpPrinter
         Cmd("gskit stock <sku>",             "locate inventory near a zip code  (Stores-FindStores)");
         Cmd("gskit tiles <sku> [sku2 ...]",  "batch price + availability lookup  (Tile-GetProductsJSON)");
         Cmd("gskit store-availability <sku>","per-variant availability at preferred store");
+        Cmd("gskit trade-search <query>",   "trade wizard product search  (Trade-GetSuggestions)");
+        Cmd("gskit trade-value <productId>", "cash + credit trade values  (Trade-Show)");
         Cmd("gskit info <sku>",              "product title, price, trade-in     (Product-Variation)");
         Cmd("gskit sdd <sku>",               "same-day delivery eligibility      (Product-SameDayDelivery)");
         Cmd("gskit probe <sku>",             "dev: raw inventory probe via selectedStore");
@@ -52,6 +54,9 @@ public static class HelpPrinter
         Ex("gskit stock <sku> --zip <zip> --in-stock-only --format json");
         Ex("gskit tiles <sku1> <sku2> <sku3>");
         Ex("gskit store-availability <sku>");
+        Ex("gskit trade-search "call of duty infinite warfare"");
+        Ex("gskit trade-value <productId> --condition Pre-Owned");
+        Ex("gskit trade-value <productId> --raw  # inspect raw HTML when values are zero");
         Ex("gskit info <sku> --debug");
         Ex("gskit sdd <sku>");
         AnsiConsole.WriteLine();
@@ -62,7 +67,7 @@ public static class HelpPrinter
         AnsiConsole.MarkupLine(
             "  [dim]stock   — Stores-FindStores, works from residential IP[/]");
         AnsiConsole.MarkupLine(
-            "  [dim]tiles / store-availability — residential IP only (CF blocks datacenter)[/]");
+            "  [dim]tiles / store-availability / trade-search / trade-value — residential only[/]");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine(
             "  [dim]dotnet run:  dotnet run --project src/GSKit.CLI -- <command> [args][/]");

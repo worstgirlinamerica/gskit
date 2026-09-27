@@ -60,3 +60,30 @@ public record ProductDetailStoreAvailability(
     bool                       HasVariantsInStock,
     List<VariantAvailability>  Variants
 );
+
+/// <summary>
+/// One result from Trade-GetSuggestions — the trade wizard's product search.
+/// ProductId here is GameStop's internal trade system ID, NOT the SKU used
+/// by other endpoints. Pass it to Trade-Show to get cash/credit values.
+/// </summary>
+public record TradeSuggestion(
+    string ProductId,
+    string Name,
+    string ImageUrl
+);
+
+/// <summary>
+/// Trade-in value breakdown from Trade-Show (server-rendered HTML partial).
+/// CashValue    — what GS pays you in cash
+/// CreditValue  — what GS pays as in-store credit (always higher)
+/// ProBonusValue — additional credit for Pro members on top of CreditValue
+/// </summary>
+public record TradeValue(
+    string  ProductId,
+    string  Condition,
+    string  ProductName,
+    decimal CashValue,
+    decimal CreditValue,
+    decimal ProBonusValue,
+    string  RawHtml
+);

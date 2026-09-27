@@ -62,6 +62,8 @@ return argList[0] switch
     "search"             => await SearchCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
     "tiles"              => await TilesCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
     "store-availability" => await StoreAvailabilityCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "trade-search"       => await TradeSearchCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
+    "trade-value"        => await TradeValueCommand.RunAsync(argList.Skip(1).ToArray(), ctx),
     _                    => Unknown(argList[0]),
 };
 
