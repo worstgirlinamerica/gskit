@@ -32,26 +32,26 @@ public static class HelpPrinter
         AnsiConsole.WriteLine();
 
         Section("CONFIG");
-        AnsiConsole.MarkupLine($"  [dim]~/.config/gskit/config.json[/]");
-        AnsiConsole.MarkupLine($"  [dim]  {{[/]");
-        AnsiConsole.MarkupLine($"  [dim]    \"defaultZip\":    \"<zip>\",[/]");
-        AnsiConsole.MarkupLine($"  [dim]    \"defaultRadius\": 100[/]");
-        AnsiConsole.MarkupLine($"  [dim]  }}[/]");
+        AnsiConsole.MarkupLine("  [dim]~/.config/gskit/config.json[/]");
+        AnsiConsole.MarkupLine("  [dim]  {[/]");
+        AnsiConsole.MarkupLine("  [dim]    \"defaultZip\":    \"<your zip>\",  [/]");
+        AnsiConsole.MarkupLine("  [dim]    \"defaultRadius\": 100[/]");
+        AnsiConsole.MarkupLine("  [dim]  }[/]");
         AnsiConsole.WriteLine();
 
         Section("EXAMPLES");
-        Ex("gskit stock 133857 --zip <zip>");
-        Ex("gskit stock 133857 --zip <zip> --in-stock-only -v");
-        Ex("gskit stock 133857 --zip <zip> --format json");
-        Ex("gskit stock 133857 --lat <lat> --long <lon>");
-        Ex("gskit info  133857");
-        Ex("gskit info  133857 --debug");
-        Ex("gskit sdd   133857");
+        Ex("gskit stock <sku> --zip <zip>");
+        Ex("gskit stock <sku> --zip <zip> --in-stock-only -v");
+        Ex("gskit stock <sku> --zip <zip> --format json");
+        Ex("gskit stock <sku> --lat <lat> --long <lon>");
+        Ex("gskit info  <sku>");
+        Ex("gskit info  <sku> --debug");
+        Ex("gskit sdd   <sku>");
         AnsiConsole.WriteLine();
 
         Section("NOTE");
         AnsiConsole.MarkupLine("  [dim]When using dotnet run, pass -- before gskit args:[/]");
-        AnsiConsole.MarkupLine("  [dim]  dotnet run --project src/GSKit.CLI -- stock 133857 --zip <zip>[/]");
+        AnsiConsole.MarkupLine("  [dim]  dotnet run --project src/GSKit.CLI -- stock <sku> --zip <zip>[/]");
         AnsiConsole.MarkupLine("  [dim]  dotnet run --project src/GSKit.CLI -- --help[/]");
         AnsiConsole.WriteLine();
     }

@@ -13,7 +13,6 @@ public static class StockCommand
 {
     public static async Task<int> RunAsync(string[] args, RunContext ctx)
     {
-        // ── Parse args ────────────────────────────────────────────────────────
         string? sku         = null;
         string? zip         = null;
         double? lat         = null;
@@ -45,7 +44,6 @@ public static class StockCommand
             return 1;
         }
 
-        // ── Geocode ───────────────────────────────────────────────────────────
         double searchLat, searchLon;
 
         if (lat.HasValue && lon.HasValue)
@@ -59,7 +57,7 @@ public static class StockCommand
             Log.Geo($"resolving {zip}");
             var sw = Stopwatch.StartNew();
             (searchLat, searchLon) = await GeocodingHelper.ZipToLatLonAsync(zip);
-            Log.Dbg($"geocode in {sw.ElapsedMilliseconds}ms  →  {searchLat:F5}, {searchLon:F5}", ctx.Debug);
+            Log.Dbg($"geocode  {searchLat:F5}, {searchLon:F5}  ({sw.ElapsedMilliseconds}ms)", ctx.Debug);
         }
         else
         {
@@ -67,7 +65,6 @@ public static class StockCommand
             return 1;
         }
 
-        // ── Fetch ─────────────────────────────────────────────────────────────
         Log.Http($"Stores-FindStores  sku={sku}  radius={radius:F0}mi");
 
         InventoryResult result;
@@ -93,9 +90,12 @@ public static class StockCommand
         }
 
         timer.Stop();
-        Log.Ok($"{result.TotalStores} stores · {result.InStockCount} in stock  [{timer.ElapsedMilliseconds}ms]");
 
-        // ── Debug dump ────────────────────────────────────────────────────────
+        // OK line: count is the meaningful fragment — highlight it
+        var inCount  = result.InStockCount;
+        var total    = result.TotalStores;
+        Log.Ok($"{total} stores found  ·  {Log.Hl(inCount > 0 ? $"{inCount} in stock" : "0 in stock", inCount > 0 ? "green bold" : "dim")}  [{timer.ElapsedMilliseconds}ms]");
+
         if (ctx.Debug && result.RawJson is not null)
         {
             AnsiConsole.WriteLine();
@@ -114,34 +114,27 @@ public static class StockCommand
         };
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Table renderer
-    // ─────────────────────────────────────────────────────────────────────────
-
     private static int OutputTable(InventoryResult r, bool inStockOnly, bool verbose)
     {
         var inStock  = r.InStock.ToList();
         var outStock = r.OutOfStock.ToList();
 
-        // ── IN STOCK block ────────────────────────────────────────────────────
         if (inStock.Count > 0)
         {
-            AnsiConsole.Write(new Rule($"[green bold]IN STOCK[/] [dim]({inStock.Count})[/]")
+            AnsiConsole.Write(new Rule($"[green]IN STOCK[/] [dim]({inStock.Count})[/]")
                 { Justification = Justify.Left });
             AnsiConsole.WriteLine();
-
             var t = MakeTable(verbose);
             foreach (var s in inStock) AddRow(t, s, inStock: true, verbose);
             AnsiConsole.Write(t);
         }
         else
         {
-            AnsiConsole.Write(new Rule($"[dim]IN STOCK (0)[/]") { Justification = Justify.Left });
+            AnsiConsole.Write(new Rule("[dim]IN STOCK (0)[/]") { Justification = Justify.Left });
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[dim]  no stores carrying this SKU within the search radius[/]");
         }
 
-        // ── OUT OF STOCK block ────────────────────────────────────────────────
         if (!inStockOnly)
         {
             if (outStock.Count > 0)
@@ -162,7 +155,6 @@ public static class StockCommand
                 $"  [dim]{outStock.Count} out-of-stock store{(outStock.Count == 1 ? "" : "s")} hidden  (--in-stock-only)[/]");
         }
 
-        // ── Footer ────────────────────────────────────────────────────────────
         AnsiConsole.WriteLine();
         AnsiConsole.Write(new Rule() { Justification = Justify.Left, Style = Style.Parse("dim") });
         AnsiConsole.MarkupLine(
@@ -177,17 +169,17 @@ public static class StockCommand
         var t = new Table()
             .BorderStyle(Style.Parse("grey23"))
             .Border(TableBorder.Simple)
-            .AddColumn(new TableColumn("[grey85]STORE[/]"))
-            .AddColumn(new TableColumn("[grey85]CITY[/]"))
-            .AddColumn(new TableColumn("[grey85]ST[/]"))
-            .AddColumn(new TableColumn("[grey85]DIST[/]") { Alignment = Justify.Right })
-            .AddColumn(new TableColumn("[grey85]CONDITION[/]"))
-            .AddColumn(new TableColumn("[grey85]HOURS[/]"));
+            .AddColumn(new TableColumn("[dim]STORE[/]"))
+            .AddColumn(new TableColumn("[dim]CITY[/]"))
+            .AddColumn(new TableColumn("[dim]ST[/]"))
+            .AddColumn(new TableColumn("[dim]DIST[/]") { Alignment = Justify.Right })
+            .AddColumn(new TableColumn("[dim]CONDITION[/]"))
+            .AddColumn(new TableColumn("[dim]HOURS[/]"));
 
         if (verbose)
         {
-            t.AddColumn(new TableColumn("[grey85]ADDRESS[/]"));
-            t.AddColumn(new TableColumn("[grey85]PHONE[/]"));
+            t.AddColumn(new TableColumn("[dim]ADDRESS[/]"));
+            t.AddColumn(new TableColumn("[dim]PHONE[/]"));
         }
 
         return t;
@@ -195,7 +187,6 @@ public static class StockCommand
 
     private static void AddRow(Table table, Store s, bool inStock, bool verbose)
     {
-        // Condition string
         var inStockConds = s.ConditionsInStock
             .Where(c => c.IsInStock)
             .Select(c => c.DisplayName)
@@ -205,7 +196,6 @@ public static class StockCommand
             ? string.Join(", ", inStockConds)
             : (s.IsInStock ? "In Stock" : "—");
 
-        // Hours string
         var hoursStr = s.IsCurrentlyOpen switch
         {
             true  => $"open until {s.TodayClosingTime ?? "?"}",
@@ -213,49 +203,35 @@ public static class StockCommand
             null  => "—",
         };
 
-        // City / state — normalize ALL-CAPS that GameStop DB returns
         var city  = TitleCase(s.City);
-        var state = s.StateCode.ToUpper();
         var name  = Markup.Escape(s.Name.Length > 28 ? s.Name[..25] + "…" : s.Name);
         var dist  = $"{s.DistanceMiles:F1} mi";
         var cond  = Markup.Escape(condStr.Length > 22 ? condStr[..19] + "…" : condStr);
-        var hours = Markup.Escape(hoursStr);
 
-        // Condition cell — green/yellow/dim
         string condMarkup = inStock
             ? (s.IsLimitedStock ? $"[yellow]{cond}[/]" : $"[green]{cond}[/]")
             : $"[dim]{cond}[/]";
 
-        // Preferred store indicator
-        string nameMarkup = s.IsPreferredStore
-            ? $"[cyan bold]{name}[/] [dim cyan]★[/]"
-            : name;
-
         var cells = new List<string>
         {
-            nameMarkup,
+            name,
             Markup.Escape(city),
-            Markup.Escape(state),
+            Markup.Escape(s.StateCode.ToUpper()),
             $"[dim]{Markup.Escape(dist)}[/]",
             condMarkup,
-            $"[dim]{hours}[/]",
+            $"[dim]{Markup.Escape(hoursStr)}[/]",
         };
 
         if (verbose)
         {
             var addr = s.Address2 is { Length: > 0 }
-                ? $"{s.Address1}, {s.Address2}"
-                : s.Address1;
+                ? $"{s.Address1}, {s.Address2}" : s.Address1;
             cells.Add($"[dim]{Markup.Escape(addr)}[/]");
             cells.Add($"[dim]{Markup.Escape(s.Phone ?? "—")}[/]");
         }
 
         table.AddRow(cells.ToArray());
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // JSON renderer
-    // ─────────────────────────────────────────────────────────────────────────
 
     private static int OutputJson(InventoryResult r)
     {
