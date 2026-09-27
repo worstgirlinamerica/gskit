@@ -54,7 +54,7 @@ public static class HelpPrinter
         Ex("gskit stock <sku> --zip <zip> --in-stock-only --format json");
         Ex("gskit tiles <sku1> <sku2> <sku3>");
         Ex("gskit store-availability <sku>");
-        Ex("gskit trade-search "call of duty infinite warfare"");
+        Ex("gskit trade-search \"call of duty infinite warfare\"");
         Ex("gskit trade-value <productId> --condition Pre-Owned");
         Ex("gskit trade-value <productId> --raw  # inspect raw HTML when values are zero");
         Ex("gskit info <sku> --debug");
