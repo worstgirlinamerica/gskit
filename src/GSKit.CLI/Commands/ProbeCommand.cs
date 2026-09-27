@@ -9,10 +9,11 @@ namespace GSKit.CLI.Commands;
 /// <summary>
 /// gskit probe &lt;sku&gt; --store &lt;storeId&gt; --zip &lt;zip&gt;
 ///
-/// Dev/debug command. Full session flow:
-///   1. GET homepage → dwsid + dwanonymous_ cookies
-///   2. POST Stores-UpdateInStoreShipmentID → pins store into session
-///   3. GET Stores-FindStores?selectedStore=&lt;id&gt; → preferredStore now has inventory[]
+/// Dev/debug command. Hits Stores-FindStores?selectedStore=&lt;id&gt; and prints the
+/// raw preferredStore inventory[] for that store. The SetPreferredStore POST
+/// (Stores-UpdateInStoreShipmentID) was removed — it requires a dwsid session
+/// cookie to work and 403s without one. The selectedStore query param alone is
+/// enough to get the preferredStore inventory block.
 /// </summary>
 public static class ProbeCommand
 {
@@ -65,19 +66,10 @@ public static class ProbeCommand
 
         await using var client = new GameStopClient(ctx.Debug);
 
-        // Step 1: init session
-        Log.Info("step 1  →  init session (GET homepage)");
-        await client.EnsureSessionAsync();
-
-        // Step 2: pin the store
-        Log.Info($"step 2  →  pin store {storeId} into session");
-        await client.SetPreferredStoreAsync(storeId, sku);
-
-        // Step 3: query with selectedStore
-        Log.Http($"step 3  →  Stores-FindStores  sku={sku}  selectedStore={storeId}");
-        var sw = Stopwatch.StartNew();
+        Log.Http($"Stores-FindStores  sku={sku}  selectedStore={storeId}");
+        var sw      = Stopwatch.StartNew();
         var scraper = new StoreInventory(client);
-        var raw = await scraper.ProbeStoreInventoryAsync(sku, storeId, searchLat, searchLon, radius);
+        var raw     = await scraper.ProbeStoreInventoryAsync(sku, storeId, searchLat, searchLon, radius);
         sw.Stop();
 
         Log.Ok($"done  [[{sw.ElapsedMilliseconds}ms]]");
