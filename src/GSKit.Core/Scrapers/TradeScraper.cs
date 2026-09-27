@@ -38,17 +38,18 @@ public sealed class TradeScraper(GameStopClient client)
         var qs  = $"q={HttpUtility.UrlEncode(query)}&format=ajax";
         var res = await client.SfccGetAsync(
             "Trade-GetSuggestions", qs,
-            refererSku: null, ct: ct);
+            refererSku: null, withCookies: true, ct: ct);
         var body = await res.Content.ReadAsStringAsync(ct);
 
+        // CF sometimes returns block pages with 200 OK — check body before status
+        if (body.Contains("Attention Required") || body.Contains("cf-error-details") ||
+            body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
+            throw new CloudflareBlockException(
+                "Trade-GetSuggestions is CF-blocked. This endpoint requires cookies from a live browser session — run gskit from your Mac with Chrome cookies available, or capture the response in a HAR first.");
+
         if (!res.IsSuccessStatusCode)
-        {
-            if (body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
-                throw new CloudflareBlockException(
-                    "Trade-GetSuggestions requires a residential IP (CF blocks datacenter).");
             throw new HttpRequestException(
                 $"Trade-GetSuggestions returned {(int)res.StatusCode}: {body[..Math.Min(200, body.Length)]}");
-        }
 
         // Response is JSON: { "suggestions": [ { "productId": "...", "name": "...", "image": "..." }, ... ] }
         // Some older responses use "products" instead of "suggestions" — try both.
@@ -88,19 +89,19 @@ public sealed class TradeScraper(GameStopClient client)
         var qs  = $"pid={HttpUtility.UrlEncode(productId)}&condition={HttpUtility.UrlEncode(condition)}&format=ajax";
         var res = await client.SfccGetAsync(
             "Trade-Show", qs,
-            refererSku: null, ct: ct);
+            refererSku: null, withCookies: true, ct: ct);
 
         // Trade-Show uses text/html Accept — override for this call
         var body = await res.Content.ReadAsStringAsync(ct);
 
+        if (body.Contains("Attention Required") || body.Contains("cf-error-details") ||
+            body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
+            throw new CloudflareBlockException(
+                "Trade-Show is CF-blocked. Needs cookies from a live browser session.");
+
         if (!res.IsSuccessStatusCode)
-        {
-            if (body.Contains("cf-browser-verification") || body.Contains("Checking your browser"))
-                throw new CloudflareBlockException(
-                    "Trade-Show requires a residential IP (CF blocks datacenter).");
             throw new HttpRequestException(
                 $"Trade-Show returned {(int)res.StatusCode}: {body[..Math.Min(200, body.Length)]}");
-        }
 
         return ParseTradeHtml(body, productId, condition);
     }
