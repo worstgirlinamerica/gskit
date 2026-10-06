@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>gskit</AssemblyName>
+    <Version>1.0.0</Version>
     <RootNamespace>GSKit.CLI</RootNamespace>
     <PublishSingleFile>true</PublishSingleFile>
   </PropertyGroup>
