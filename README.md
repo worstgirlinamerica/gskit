@@ -1,10 +1,33 @@
 # gskit
 
-GameStop reverse engineering toolkit. Inventory, trade-ins, pricing, store data.
+GameStop reverse engineering toolkit: inventory, trade-ins, pricing, and store data.
 
 ## Install
 
-Requires [.NET SDK](https://dotnet.microsoft.com/download).
+Download the binary for your system from the [Releases page](https://github.com/worstgirlinamerica/gskit/releases).
+
+| Platform | File |
+|---|---|
+| Windows x64 | `win-x64.exe` |
+| Windows ARM64 | `win-arm64.exe` |
+| macOS Intel | `osx-x64.tar.gz` |
+| macOS Apple Silicon | `osx-arm64.tar.gz` |
+| Linux x64 | `linux-x64.tar.gz` |
+| Linux ARM64 | `linux-arm64.tar.gz` |
+
+**macOS:** Extract and allow the binary to run, Gatekeeper will likely block them by default because builds are not signed, so run the commands below
+
+```bash
+tar -xzf gskit-<version>-osx-arm64.tar.gz
+xattr -d com.apple.quarantine gskit
+sudo mv gskit /usr/local/bin/
+```
+
+**Windows:** Run the `.exe` from a terminal, or move it to a folder on your `PATH`.
+
+## Build from source
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 
 ```bash
 git clone https://github.com/worstgirlinamerica/gskit
@@ -12,87 +35,40 @@ cd gskit
 dotnet build
 ```
 
+To build a release binary for your platform:
+
+```bash
+dotnet publish src/GSKit.CLI -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=true -o ./publish
+```
+
+Or run `scripts/build-release.sh` to build all six targets.
+
 ## Usage
 
 ```bash
-# Check in-store inventory by zip code
-dotnet run --project src/GSKit.CLI -- stock <sku> --zip <zip>
-
-# By coordinates (faster, skips geocoding)
-dotnet run --project src/GSKit.CLI -- stock <sku> --lat <lat> --long <lon>
-
-# Wider radius, in-stock stores only
-dotnet run --project src/GSKit.CLI -- stock <sku> --zip <zip> --radius 50 --in-stock-only
-
-# JSON output
-dotnet run --project src/GSKit.CLI -- stock <sku> --zip <zip> --format json
-
-# Debug — dumps raw API response
-dotnet run --project src/GSKit.CLI -- stock <sku> --zip <zip> --debug
-
-# Product info
-dotnet run --project src/GSKit.CLI -- info <sku>
-```
-
-Or build a self-contained binary and install it:
-
-```bash
-# Intel Mac
-dotnet publish src/GSKit.CLI -c Release -r osx-x64 -o ./publish
-sudo cp ./publish/gskit /usr/local/bin/gskit
-
-# Apple Silicon
-dotnet publish src/GSKit.CLI -c Release -r osx-arm64 -o ./publish
-sudo cp ./publish/gskit /usr/local/bin/gskit
-
-# Linux
-dotnet publish src/GSKit.CLI -c Release -r linux-x64 -o ./publish
-sudo cp ./publish/gskit /usr/local/bin/gskit
-```
-
-Then just:
-```bash
 gskit stock <sku> --zip <zip>
-gskit info  <sku>
+gskit stock <sku> --lat <lat> --long <lon>        # skips geocoding
+gskit stock <sku> --zip <zip> --radius 50 --in-stock-only
+gskit stock <sku> --zip <zip> --format json
+gskit stock <sku> --zip <zip> --debug             # dumps the raw API response
+gskit info <sku>
 gskit --help
 ```
 
-## Auth
-
-None required. GameStop's Stores-FindStores endpoint returns full inventory data
-with no cookies and no login from residential IPs. Confirmed from HAR analysis —
-zero cookies sent on working requests.
-
-If you're on a VPN or datacenter IP, Cloudflare will block you (403). Use a
-residential connection.
+<!-- Add sections for: trade, tiles, store-availability, probe, sdd -->
 
 ## Config
 
-Set defaults so you don't have to pass `--zip` every time:
+Set defaults so you don't have to pass `--zip` each time. Create `~/.config/gskit/config.json`:
 
-```
-~/.config/gskit/config.json
+```json
 {
-  "defaultZip":    "<your zip>",
+  "defaultZip": "<your zip>",
   "defaultRadius": 100
 }
 ```
 
-## Confirmed endpoints
+## Auth
 
-| Controller-Action | What |
-|---|---|
-| `Stores-FindStores` | In-store inventory by lat/lon + SKU |
-| `Product-Variation` | Variant price + availability per condition |
-| `SearchServices-GetSuggestions` | Autocomplete |
-| `Page-loadComponent?tradeInLinks=true` | Trade-in entry |
-
-## Phase plan
-
-| Phase | Command | Status |
-|---|---|---|
-| 1 | `gskit stock` | ✅ |
-| 2 | `gskit info`, `gskit sdd` | ✅ |
-| 3 | `gskit search`, `gskit product` | 🔜 |
-| 4 | `gskit trade` | 🔜 |
-| 5 | `gskit watch` | 🔜 |
+<!-- Confirm this still matches the current code -->
+Stock and info lookups need no login. Requests from VPN or datacenter IPs may be blocked by Cloudflare (403). Use a residential connection.
