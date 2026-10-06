@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 NAME="gskit"
-VERSION="1.0.0"   # keep in sync with <Version> in GSKit.CLI.csproj
+VERSION="1.0.1"   # keep in sync with <Version> in GSKit.CLI.csproj
 PROJ="src/GSKit.CLI/GSKit.CLI.csproj"
 DIST="dist"
 TARGETS=(win-x64 win-arm64 osx-x64 osx-arm64 linux-x64 linux-arm64)

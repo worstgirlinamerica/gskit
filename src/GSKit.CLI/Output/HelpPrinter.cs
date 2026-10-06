@@ -70,7 +70,7 @@ public static class HelpPrinter
             "  [dim]tiles / store-availability / trade-search / trade-value — residential only[/]");
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine(
-            "  [dim]dotnet run:  dotnet run --project src/GSKit.CLI -- <command> [args][/]");
+            "  [dim]dotnet run:  dotnet run --project src/GSKit.CLI -- <command> [[args]][/]");
         AnsiConsole.WriteLine();
     }
 
