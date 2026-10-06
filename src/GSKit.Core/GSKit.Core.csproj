@@ -6,6 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- AngleSharp for HTML parsing (Phase 2+) -->
-    <PackageReference Include="AngleSharp" Version="1.2.0" />
+    <PackageReference Include="AngleSharp" Version="1.5.2" />
   </ItemGroup>
 </Project>

@@ -5,3 +5,6 @@ obj/
 .gskit/
 publish/
 publish-*/
+dist/
+build/
+/gskit
